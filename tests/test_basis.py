@@ -1,0 +1,95 @@
+"""Tests for ondes.basis."""
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+
+from ondes.basis import BASIS_KINDS, BasisBody, BasisLayer, siren_init
+
+
+def test_siren_init_first_layer_uses_one_over_in_dim_bound():
+    # Given: a first-layer init with in_dim=5
+    # When: drawing many weight samples
+    # Then: |W|, |b| are bounded by 1/in_dim, never by sqrt(6/in_dim)/omega
+    in_dim, out_dim, omega = 5, 64, 30.0
+    W, b = siren_init(in_dim, out_dim, omega, is_first=True, key=jax.random.PRNGKey(0))
+    expected_bound = 1.0 / in_dim
+    assert jnp.max(jnp.abs(W)) <= expected_bound + 1e-6
+    assert jnp.max(jnp.abs(b)) <= expected_bound + 1e-6
+    siren_bound = float(jnp.sqrt(6.0 / in_dim) / omega)
+    assert siren_bound < expected_bound  # confirm the two formulas really differ
+
+
+def test_siren_init_hidden_layer_uses_sqrt6_over_omega_bound():
+    # Given: a hidden-layer init with omega large enough to make the SIREN bound tight
+    # When: drawing samples
+    # Then: |W| is within sqrt(6/in_dim)/omega and strictly exceeds it never
+    in_dim, out_dim, omega = 64, 64, 30.0
+    W, b = siren_init(in_dim, out_dim, omega, is_first=False, key=jax.random.PRNGKey(1))
+    expected_bound = float(jnp.sqrt(6.0 / in_dim) / omega)
+    assert jnp.max(jnp.abs(W)) <= expected_bound + 1e-6
+    assert jnp.max(jnp.abs(b)) <= expected_bound + 1e-6
+
+
+def test_basis_layer_each_kind_produces_finite_output():
+    # Given: a BasisLayer of each kind on a fixed deterministic input
+    # When: forward-passing
+    # Then: output is finite and has the right shape
+    in_dim, out_dim = 4, 16
+    x = jnp.linspace(-1.0, 1.0, in_dim)
+    for kind in BASIS_KINDS:
+        layer = BasisLayer(in_dim, out_dim, omega_init=6.0, kind=kind, is_first=True, key=jax.random.PRNGKey(7))
+        y = layer(x)
+        assert y.shape == (out_dim,)
+        assert bool(jnp.all(jnp.isfinite(y)))
+
+
+def test_basis_body_call_is_jit_compilable():
+    # Given: a BasisBody and a coordinate input
+    # When: jitting the call
+    # Then: the jit-compiled function runs and matches the eager call
+    body = BasisBody(in_dim=2, hidden_dim=32, num_hidden_layers=3, kind="siren", key=jax.random.PRNGKey(2))
+    coord = jnp.array([0.25, -0.5])
+    eager = body(coord)
+    jitted = eqx.filter_jit(body)(coord)
+    assert jnp.allclose(eager, jitted)
+    assert eager.shape == ()
+
+
+def test_basis_body_parameter_count_matches_analytic_formula():
+    # Given: a BasisBody with known dims
+    # When: counting learnable float-array leaves
+    # Then: total equals sum of layer (W, b, omega, s) + readout (W, b)
+    in_dim, hidden_dim, num_layers = 3, 16, 4
+    body = BasisBody(
+        in_dim=in_dim, hidden_dim=hidden_dim, num_hidden_layers=num_layers, kind="wire", key=jax.random.PRNGKey(3)
+    )
+
+    expected = 0
+    for i in range(num_layers):
+        in_d = in_dim if i == 0 else hidden_dim
+        expected += hidden_dim * in_d  # W
+        expected += hidden_dim  # b
+        expected += 1  # omega
+        expected += 1  # s
+    expected += 1 * hidden_dim  # readout_W
+    expected += 1  # readout_b
+
+    leaves = jax.tree_util.tree_leaves(body)
+    total = sum(int(leaf.size) for leaf in leaves if hasattr(leaf, "size"))
+    assert total == expected
+
+
+def test_basis_body_film_modulation_changes_output():
+    # Given: a body run with and without FiLM
+    # When: passing a non-trivial FiLM tensor
+    # Then: outputs differ (modulation is actually wired)
+    in_dim, hidden_dim, num_layers = 2, 8, 2
+    body = BasisBody(
+        in_dim=in_dim, hidden_dim=hidden_dim, num_hidden_layers=num_layers, kind="siren", key=jax.random.PRNGKey(4)
+    )
+    coord = jnp.array([0.3, -0.7])
+    film = jnp.ones((num_layers, 2 * hidden_dim)) * 0.5
+    plain = body(coord)
+    modulated = body(coord, film=film)
+    assert not jnp.allclose(plain, modulated)
