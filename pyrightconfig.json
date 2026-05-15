@@ -1,5 +1,5 @@
 {
-    "include": ["PACKAGE_NAME"],
+    "include": ["ondes"],
     "exclude": ["tests"],
     "pythonVersion": "3.11",
     "typeCheckingMode": "strict",

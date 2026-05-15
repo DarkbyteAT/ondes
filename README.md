@@ -1,11 +1,11 @@
-# PACKAGE_NAME
+# ondes
 
-PACKAGE_DESCRIPTION
+Functional implementations and tests of implicit neural representations (SIREN, H-SIREN, WIRE) in JAX/Equinox
 
 ## Installation
 
 ```bash
-pip install PACKAGE_NAME
+pip install ondes
 ```
 
 ## License

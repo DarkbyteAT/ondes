@@ -1,7 +1,7 @@
 [project]
-name = "PACKAGE_NAME"
+name = "ondes"
 version = "0.1.0"
-description = "PACKAGE_DESCRIPTION"
+description = "Functional implementations and tests of implicit neural representations (SIREN, H-SIREN, WIRE) in JAX/Equinox"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -16,7 +16,13 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = []
+dependencies = [
+    "equinox>=0.13.8",
+    "jax>=0.10.0",
+    "jax-tqdm>=0.4.0",
+    "jaxtyping>=0.3.9",
+    "numpy>=2.4.4",
+]
 
 [dependency-groups]
 dev = [
@@ -28,8 +34,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/DarkbyteAT/PACKAGE_NAME"
-Repository = "https://github.com/DarkbyteAT/PACKAGE_NAME"
+Homepage = "https://github.com/DarkbyteAT/ondes"
+Repository = "https://github.com/DarkbyteAT/ondes"
 
 [build-system]
 requires = ["hatchling"]
