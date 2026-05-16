@@ -184,6 +184,16 @@ def test_basis_body_out_features_one_returns_scalar():
     assert y.shape == ()
 
 
+def test_basis_body_rejects_zero_hidden_layers():
+    # Given: a request to build a body with no hidden layers
+    # When: constructing
+    # Then: the constructor rejects it — a 0-layer body would silently break
+    # the readout's shape contract (input flows straight to a (out_dim, hidden)
+    # matmul that expects post-hidden activations).
+    with pytest.raises(AssertionError):
+        BasisBody(in_dim=2, hidden_dim=8, num_hidden_layers=0, kind="siren", key=jax.random.PRNGKey(20))
+
+
 def test_basis_body_out_features_one_canonicalises_to_none():
     # Given: two BasisBody instances differing only in out_features=None vs out_features=1
     # When: comparing their pytree structures

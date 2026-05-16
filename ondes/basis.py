@@ -161,6 +161,7 @@ class BasisBody(eqx.Module):
                 ``None`` so the two scalar constructions are indistinguishable.
         """
         assert kind in BASIS_KINDS, kind
+        assert num_hidden_layers >= 1, f"num_hidden_layers must be >= 1, got {num_hidden_layers}"
         assert out_features is None or (
             isinstance(out_features, int) and not isinstance(out_features, bool) and out_features >= 1
         ), f"out_features must be None or positive int, got {out_features!r}"
@@ -210,11 +211,11 @@ class BasisBody(eqx.Module):
         """Internal linear readout. Not a user extension point."""
         return self.readout_W @ h + self.readout_b
 
-    def __call__(self, x, *, film=None):
+    def __call__(self, coord, *, film=None):
         """Forward pass.
 
         Args:
-            x: Coordinate vector of shape ``(in_dim,)``.
+            coord: Coordinate vector of shape ``(in_dim,)``.
             film: Optional FiLM tensor of shape
                 ``(num_hidden_layers, 2 * hidden_dim)`` whose halves provide
                 ``gamma`` and ``beta`` per layer. When ``None`` no modulation
@@ -224,7 +225,7 @@ class BasisBody(eqx.Module):
             Scalar when ``out_features`` is ``None`` (or was constructed as
             ``1``); otherwise a vector of shape ``(out_features,)``.
         """
-        y = self._readout(self.trunk(x, film=film))
+        y = self._readout(self.trunk(coord, film=film))
         if self.out_features is None:
             return y.squeeze()
         return y
