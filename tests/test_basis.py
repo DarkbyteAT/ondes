@@ -3,6 +3,7 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import pytest
 
 from ondes.basis import BASIS_KINDS, BasisBody, BasisLayer, siren_init
 
@@ -136,14 +137,16 @@ def test_basis_body_trunk_returns_hidden_features():
     assert jnp.allclose(h_scalar, h_vector)
 
 
-def test_basis_body_trunk_is_jit_compilable():
-    # Given: a BasisBody
+@pytest.mark.parametrize("kind", BASIS_KINDS)
+def test_basis_body_trunk_is_jit_compilable(kind):
+    # Given: a BasisBody of each basis kind
     # When: jitting trunk()
-    # Then: jit-compiled result matches eager
-    body = BasisBody(in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(8))
+    # Then: jit-compiled result matches eager and has the expected shape
+    body = BasisBody(in_dim=2, hidden_dim=16, num_hidden_layers=2, kind=kind, key=jax.random.PRNGKey(8))
     coord = jnp.array([0.3, -0.4])
     eager = body.trunk(coord)
     jitted = eqx.filter_jit(lambda b, c: b.trunk(c))(body, coord)
+    assert eager.shape == (16,)
     assert jnp.allclose(eager, jitted)
 
 
@@ -160,3 +163,86 @@ def test_basis_body_trunk_with_film_modulation_changes_output():
     plain = body.trunk(coord)
     modulated = body.trunk(coord, film=film)
     assert not jnp.allclose(plain, modulated)
+
+
+def test_basis_body_out_features_one_returns_scalar():
+    # Given: out_features=1 (the canonicalised-to-None boundary)
+    # When: forward-passing
+    # Then: output is a 0-d scalar — the user-facing contract for 1 is "scalar"
+    body = BasisBody(
+        in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(10), out_features=1
+    )
+    y = body(jnp.array([0.1, -0.2]))
+    assert y.shape == ()
+
+
+def test_basis_body_out_features_two_returns_vector():
+    # Given: out_features=2 (the smallest vector-returning width)
+    # When: forward-passing
+    # Then: output is shape (2,) — catches off-by-one in the squeeze branch
+    body = BasisBody(
+        in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(11), out_features=2
+    )
+    y = body(jnp.array([0.1, -0.2]))
+    assert y.shape == (2,)
+
+
+def test_basis_body_grad_through_scalar_path():
+    # Given: a default (scalar) BasisBody and a trivial loss
+    # When: taking jax.grad over the body's parameters
+    # Then: gradient is a pytree of finite, non-zero arrays matching the body's leaves
+    body = BasisBody(in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(12))
+    coord = jnp.array([0.3, -0.4])
+
+    def loss(b, c):
+        return b(c).sum()
+
+    grad = eqx.filter_grad(loss)(body, coord)
+    leaves = [leaf for leaf in jax.tree_util.tree_leaves(grad) if eqx.is_array(leaf)]
+    assert len(leaves) > 0
+    for g in leaves:
+        assert bool(jnp.all(jnp.isfinite(g)))
+    # At least one leaf must carry signal — full-zero gradient would mean broken plumbing.
+    assert any(bool(jnp.any(g != 0)) for g in leaves)
+
+
+def test_basis_body_grad_through_vector_path():
+    # Given: an out_features=4 BasisBody and a trivial loss
+    # When: taking jax.grad over the body's parameters
+    # Then: gradient is a pytree of finite, non-zero arrays
+    body = BasisBody(
+        in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(13), out_features=4
+    )
+    coord = jnp.array([0.3, -0.4])
+
+    def loss(b, c):
+        return b(c).sum()
+
+    grad = eqx.filter_grad(loss)(body, coord)
+    leaves = [leaf for leaf in jax.tree_util.tree_leaves(grad) if eqx.is_array(leaf)]
+    assert len(leaves) > 0
+    for g in leaves:
+        assert bool(jnp.all(jnp.isfinite(g)))
+    assert any(bool(jnp.any(g != 0)) for g in leaves)
+
+
+def test_basis_body_vmap_over_coords_scalar():
+    # Given: a default (scalar) BasisBody and a batch of coordinates
+    # When: vmapping the body over the leading axis
+    # Then: output has shape (B,)
+    body = BasisBody(in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(14))
+    coords = jax.random.uniform(jax.random.PRNGKey(140), (7, 2), minval=-1.0, maxval=1.0)
+    out = jax.vmap(body)(coords)
+    assert out.shape == (7,)
+
+
+def test_basis_body_vmap_over_coords_vector():
+    # Given: an out_features=3 BasisBody and a batch of coordinates
+    # When: vmapping the body over the leading axis
+    # Then: output has shape (B, 3)
+    body = BasisBody(
+        in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(15), out_features=3
+    )
+    coords = jax.random.uniform(jax.random.PRNGKey(150), (7, 2), minval=-1.0, maxval=1.0)
+    out = jax.vmap(body)(coords)
+    assert out.shape == (7, 3)

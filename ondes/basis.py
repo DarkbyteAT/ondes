@@ -114,8 +114,10 @@ class BasisBody(eqx.Module):
 
     ``out_features`` controls the readout width and the return shape of
     ``__call__``: ``None`` (default) or ``1`` gives a scalar, integer ``N > 1``
-    gives a vector of shape ``(N,)``. The readout is owned by ``ondes`` and is
-    not user-extensible — there is no ``head=`` kwarg and no ``Head`` type. To
+    gives a vector of shape ``(N,)``. The value ``1`` is canonicalised to
+    ``None`` at construction so the two scalar-yielding constructions produce
+    identical pytrees. The readout is owned by ``ondes`` and is not
+    user-extensible — there is no ``head=`` kwarg and no ``Head`` type. To
     attach a distribution head, parameterisation, or other post-trunk
     transform, build a small ``eqx.Module`` wrapper around this body and call
     ``trunk()`` (or ``__call__``) from it.
@@ -155,9 +157,15 @@ class BasisBody(eqx.Module):
             s_init: Initial WIRE width scalar (used only when ``kind == "wire"``).
             out_features: Readout width. ``None`` (default) or ``1`` makes
                 ``__call__`` return a scalar; integer ``N > 1`` makes it
-                return a vector of shape ``(N,)``.
+                return a vector of shape ``(N,)``. ``1`` is canonicalised to
+                ``None`` so the two scalar constructions are indistinguishable.
         """
         assert kind in BASIS_KINDS, kind
+        assert out_features is None or (
+            isinstance(out_features, int) and not isinstance(out_features, bool) and out_features >= 1
+        ), f"out_features must be None or positive int, got {out_features!r}"
+        if out_features == 1:
+            out_features = None
         keys = jax.random.split(key, num_hidden_layers + 1)
         layers = []
         for i in range(num_hidden_layers):
@@ -165,9 +173,10 @@ class BasisBody(eqx.Module):
             o = omega_first if i == 0 else omega_hidden
             layers.append(BasisLayer(in_d, hidden_dim, o, kind, is_first=(i == 0), key=keys[i], s_init=s_init))
         self.layers = tuple(layers)
+        # Bound applies per-output-component; independent of out_features.
         bound = jnp.sqrt(6.0 / hidden_dim) / max(omega_hidden, 1e-3)
         kw, kb = jax.random.split(keys[-1])
-        out_dim = 1 if out_features is None else int(out_features)
+        out_dim = 1 if out_features is None else out_features
         self.readout_W = jax.random.uniform(kw, (out_dim, hidden_dim), minval=-bound, maxval=bound)
         self.readout_b = jax.random.uniform(kb, (out_dim,), minval=-bound, maxval=bound)
         self.hidden_dim = hidden_dim
@@ -197,11 +206,11 @@ class BasisBody(eqx.Module):
                 h = layer(h)
         return h
 
-    def head(self, h):
+    def _readout(self, h):
         """Internal linear readout. Not a user extension point."""
         return self.readout_W @ h + self.readout_b
 
-    def __call__(self, x, film=None):
+    def __call__(self, x, *, film=None):
         """Forward pass.
 
         Args:
@@ -212,10 +221,10 @@ class BasisBody(eqx.Module):
                 is applied.
 
         Returns:
-            Scalar when ``out_features`` is ``None`` or ``1``; otherwise a
-            vector of shape ``(out_features,)``.
+            Scalar when ``out_features`` is ``None`` (or was constructed as
+            ``1``); otherwise a vector of shape ``(out_features,)``.
         """
-        y = self.head(self.trunk(x, film=film))
-        if self.out_features is None or self.out_features == 1:
+        y = self._readout(self.trunk(x, film=film))
+        if self.out_features is None:
             return y.squeeze()
         return y
