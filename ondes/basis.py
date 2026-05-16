@@ -227,5 +227,7 @@ class BasisBody(eqx.Module):
         """
         y = self._readout(self.trunk(coord, film=film))
         if self.out_features is None:
-            return y.squeeze()
+            # squeeze(-1) only collapses the readout's size-1 feature axis;
+            # any leading batch dims (e.g. from vmap with batch size 1) survive.
+            return y.squeeze(-1)
         return y

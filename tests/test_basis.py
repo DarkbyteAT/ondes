@@ -277,3 +277,15 @@ def test_basis_body_vmap_over_coords_vector():
     coords = jax.random.uniform(jax.random.PRNGKey(150), (7, 2), minval=-1.0, maxval=1.0)
     out = jax.vmap(body)(coords)
     assert out.shape == (7, 3)
+
+
+def test_basis_body_scalar_path_squeeze_only_feature_dim():
+    # Given: a default (scalar) BasisBody and a batch of size 1 — the case
+    # where unrestricted .squeeze() would silently collapse the batch dim.
+    # When: vmapping over a (1, in_dim) coord
+    # Then: output has shape (1,), not scalar (). Catches a regression where
+    # __call__ uses .squeeze() instead of .squeeze(-1).
+    body = BasisBody(in_dim=2, hidden_dim=8, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(16))
+    coord_batched = jnp.zeros((1, 2))
+    out = jax.vmap(body)(coord_batched)
+    assert out.shape == (1,), f"expected (1,), got {out.shape}"
