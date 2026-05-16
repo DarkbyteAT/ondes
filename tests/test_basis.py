@@ -57,13 +57,21 @@ def test_basis_body_call_is_jit_compilable():
     assert eager.shape == ()
 
 
-def test_basis_body_parameter_count_matches_analytic_formula():
-    # Given: a BasisBody with known dims
+@pytest.mark.parametrize("out_features,readout_out_dim", [(None, 1), (5, 5)])
+def test_basis_body_parameter_count_matches_analytic_formula(out_features, readout_out_dim):
+    # Given: a BasisBody with known dims and a known out_features
     # When: counting learnable float-array leaves
-    # Then: total equals sum of layer (W, b, omega, s) + readout (W, b)
+    # Then: total equals sum of layer (W, b, omega, s) + readout (W, b) with the
+    # readout sized by readout_out_dim — catches regressions that reshape the
+    # readout silently.
     in_dim, hidden_dim, num_layers = 3, 16, 4
     body = BasisBody(
-        in_dim=in_dim, hidden_dim=hidden_dim, num_hidden_layers=num_layers, kind="wire", key=jax.random.PRNGKey(3)
+        in_dim=in_dim,
+        hidden_dim=hidden_dim,
+        num_hidden_layers=num_layers,
+        kind="wire",
+        key=jax.random.PRNGKey(3),
+        out_features=out_features,
     )
 
     expected = 0
@@ -73,8 +81,8 @@ def test_basis_body_parameter_count_matches_analytic_formula():
         expected += hidden_dim  # b
         expected += 1  # omega
         expected += 1  # s
-    expected += 1 * hidden_dim  # readout_W
-    expected += 1  # readout_b
+    expected += readout_out_dim * hidden_dim  # readout_W
+    expected += readout_out_dim  # readout_b
 
     leaves = jax.tree_util.tree_leaves(body)
     total = sum(int(leaf.size) for leaf in leaves if hasattr(leaf, "size"))
@@ -174,6 +182,19 @@ def test_basis_body_out_features_one_returns_scalar():
     )
     y = body(jnp.array([0.1, -0.2]))
     assert y.shape == ()
+
+
+def test_basis_body_out_features_one_canonicalises_to_none():
+    # Given: two BasisBody instances differing only in out_features=None vs out_features=1
+    # When: comparing their pytree structures
+    # Then: structures are identical (canonicalisation is load-bearing for
+    # serialisation, jit caching, and tree-equality checks)
+    key = jax.random.PRNGKey(0)
+    a = BasisBody(in_dim=2, hidden_dim=8, num_hidden_layers=2, out_features=None, key=key)
+    b = BasisBody(in_dim=2, hidden_dim=8, num_hidden_layers=2, out_features=1, key=key)
+    assert jax.tree_util.tree_structure(a) == jax.tree_util.tree_structure(b)
+    assert a.out_features is None
+    assert b.out_features is None
 
 
 def test_basis_body_out_features_two_returns_vector():

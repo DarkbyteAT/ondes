@@ -12,7 +12,7 @@ A short, citable record of the design decisions that shape the public surface of
 - `Encoding` family and factories — `Gaussian`, `Dyadic`, `NO_ENCODING`, `gaussian_fixed`, `gaussian_from_shape`, `gaussian_learn`, `dyadic`.
 - `siren_init`, `nyquist_sigma` — init primitives `ondes` consumes internally.
 - `inr.trunk(coord, **kw)` — public on every basis module; returns pre-readout features.
-- `out_features` constructor kwarg on every basis class; `None` (default) ⇒ scalar return from `__call__`; integer `N > 1` ⇒ `(N,)` vector return.
+- `out_features` constructor kwarg on every basis class; `None` (default) ⇒ scalar return from `__call__`; integer `N > 1` ⇒ `(N,)` vector return. `out_features=1` is canonicalised to `None` at construction so the two scalar-return forms produce identical pytrees — relevant for serialisation, jit caching, and tree-equality checks.
 - FiLM modulation via `inr(coord, film=...)`.
 
 **Not in `ondes` (by design):**
