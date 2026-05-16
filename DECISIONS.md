@@ -44,7 +44,7 @@ A function belongs in `ondes` only if **all three** hold:
 
 1. **Spectral / init coupling** — its design depends on the basis or on input spectral properties. A function whose implementation has no dependence on `ondes`'s own internals is by definition user-side composition.
 2. **Closed-form trap** — a competent naive implementation would plausibly be wrong (numerical stability, degenerate cases, non-obvious identity). One-line wrappers fail this gate.
-3. **Multi-consumer with no plausible variant on the horizon** — the same shape is consumed by ≥2 of `{ondes, loom, samgria-jax, xptrack-jax-hooks}` *and* there's no actively-competing parameterisation in the literature that would compete for the same name. `gram_schmidt` fails this clause because the 4D/9D/3D variants are always on the horizon.
+3. **Multi-consumer with no plausible variant on the horizon** — the same shape is consumed by ≥2 of `{ondes, loom, samgria-jax, xptrack-jax-hooks}` *and* there's no actively-competing parameterisation in the literature that would compete for the same name. Present convergence alone is not enough; future stability is the second clause, because today's two consumers can diverge tomorrow. `gram_schmidt` fails this clause because the 4D/9D/3D variants are always on the horizon.
 
 Applied to today's candidate set (`normal_params`, `unit_vector`, `complex_split`, `softplus_scale`, `gram_schmidt`, `mog_params`, `categorical_logits`, `lognormal_params`), zero survive. The surviving `ondes` primitives (`siren_init`, `nyquist_sigma`) already live in the library.
 
@@ -61,7 +61,7 @@ A three-tier risk ranking, applied in reverse order (lowest risk first):
    # Classical VAEs use exp(0.5 * log_var).
    # Pick the one your loss expects.
    ```
-   CI is the anti-graduation enforcement: examples that don't run break the build, so they can't rot silently. Parameterisation changes change what the example demonstrates, so they don't drift either.
+   CI is the anti-graduation enforcement: examples that don't run break the build, so they can't rot silently. Parameterisation changes change what the example demonstrates, so they don't drift either. Tooling beats convention for sustained discipline — a README appendix code block can lie, rot, or canonise silently; a CI-tested example can do none of those.
 
 2. **README load-bearing snippet** — exactly one parameterisation-agnostic composition pattern showing the `(inr, head) Model(eqx.Module)` shape. Points at `examples/` for concrete recipes. The README is an index, not a parallel home.
 
