@@ -93,3 +93,70 @@ def test_basis_body_film_modulation_changes_output():
     plain = body(coord)
     modulated = body(coord, film=film)
     assert not jnp.allclose(plain, modulated)
+
+
+def test_basis_body_out_features_none_returns_scalar():
+    # Given: a BasisBody constructed with default out_features
+    # When: forward-passing
+    # Then: output is a 0-d scalar (preserves prior behaviour)
+    body = BasisBody(in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(5))
+    y = body(jnp.array([0.1, -0.2]))
+    assert y.shape == ()
+
+
+def test_basis_body_out_features_int_returns_vector():
+    # Given: a BasisBody with out_features=4
+    # When: forward-passing
+    # Then: output is shape (4,)
+    body = BasisBody(
+        in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(6), out_features=4
+    )
+    y = body(jnp.array([0.1, -0.2]))
+    assert y.shape == (4,)
+
+
+def test_basis_body_trunk_returns_hidden_features():
+    # Given: BasisBody instances with different out_features
+    # When: calling trunk()
+    # Then: shape is (hidden_dim,) and independent of out_features
+    hidden_dim = 32
+    coord = jnp.array([0.25, -0.5])
+    scalar_body = BasisBody(
+        in_dim=2, hidden_dim=hidden_dim, num_hidden_layers=3, kind="siren", key=jax.random.PRNGKey(7)
+    )
+    vector_body = BasisBody(
+        in_dim=2, hidden_dim=hidden_dim, num_hidden_layers=3, kind="siren", key=jax.random.PRNGKey(7), out_features=5
+    )
+    h_scalar = scalar_body.trunk(coord)
+    h_vector = vector_body.trunk(coord)
+    assert h_scalar.shape == (hidden_dim,)
+    assert h_vector.shape == (hidden_dim,)
+    # Trunk activations match: same key, same body layers; out_features only
+    # changes the readout shape.
+    assert jnp.allclose(h_scalar, h_vector)
+
+
+def test_basis_body_trunk_is_jit_compilable():
+    # Given: a BasisBody
+    # When: jitting trunk()
+    # Then: jit-compiled result matches eager
+    body = BasisBody(in_dim=2, hidden_dim=16, num_hidden_layers=2, kind="siren", key=jax.random.PRNGKey(8))
+    coord = jnp.array([0.3, -0.4])
+    eager = body.trunk(coord)
+    jitted = eqx.filter_jit(lambda b, c: b.trunk(c))(body, coord)
+    assert jnp.allclose(eager, jitted)
+
+
+def test_basis_body_trunk_with_film_modulation_changes_output():
+    # Given: trunk called with and without FiLM
+    # When: a non-trivial FiLM tensor is supplied
+    # Then: trunk outputs differ
+    in_dim, hidden_dim, num_layers = 2, 8, 2
+    body = BasisBody(
+        in_dim=in_dim, hidden_dim=hidden_dim, num_hidden_layers=num_layers, kind="siren", key=jax.random.PRNGKey(9)
+    )
+    coord = jnp.array([0.3, -0.7])
+    film = jnp.ones((num_layers, 2 * hidden_dim)) * 0.5
+    plain = body.trunk(coord)
+    modulated = body.trunk(coord, film=film)
+    assert not jnp.allclose(plain, modulated)

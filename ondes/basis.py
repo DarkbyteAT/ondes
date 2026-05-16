@@ -110,14 +110,24 @@ class BasisLayer(eqx.Module):
 
 
 class BasisBody(eqx.Module):
-    """Stack of ``BasisLayer`` s with a scalar readout head."""
+    """Stack of ``BasisLayer`` s with an internal linear readout.
+
+    ``out_features`` controls the readout width and the return shape of
+    ``__call__``: ``None`` (default) or ``1`` gives a scalar, integer ``N > 1``
+    gives a vector of shape ``(N,)``. The readout is owned by ``ondes`` and is
+    not user-extensible — there is no ``head=`` kwarg and no ``Head`` type. To
+    attach a distribution head, parameterisation, or other post-trunk
+    transform, build a small ``eqx.Module`` wrapper around this body and call
+    ``trunk()`` (or ``__call__``) from it.
+    """
 
     layers: tuple
-    readout_W: Float[Array, "1 hidden"]
-    readout_b: Float[Array, ""]
+    readout_W: Float[Array, "out hidden"]
+    readout_b: Float[Array, "out"]
     hidden_dim: int = eqx.field(static=True)
     num_hidden_layers: int = eqx.field(static=True)
     kind: str = eqx.field(static=True)
+    out_features: int | None = eqx.field(static=True)
 
     def __init__(
         self,
@@ -130,6 +140,7 @@ class BasisBody(eqx.Module):
         omega_first=6.0,
         omega_hidden=1.0,
         s_init=3.0,
+        out_features=None,
     ):
         """Initialise the body MLP.
 
@@ -142,6 +153,9 @@ class BasisBody(eqx.Module):
             omega_first: Initial frequency for the first (input) layer.
             omega_hidden: Initial frequency for subsequent layers.
             s_init: Initial WIRE width scalar (used only when ``kind == "wire"``).
+            out_features: Readout width. ``None`` (default) or ``1`` makes
+                ``__call__`` return a scalar; integer ``N > 1`` makes it
+                return a vector of shape ``(N,)``.
         """
         assert kind in BASIS_KINDS, kind
         keys = jax.random.split(key, num_hidden_layers + 1)
@@ -153,11 +167,39 @@ class BasisBody(eqx.Module):
         self.layers = tuple(layers)
         bound = jnp.sqrt(6.0 / hidden_dim) / max(omega_hidden, 1e-3)
         kw, kb = jax.random.split(keys[-1])
-        self.readout_W = jax.random.uniform(kw, (1, hidden_dim), minval=-bound, maxval=bound)
-        self.readout_b = jax.random.uniform(kb, (), minval=-bound, maxval=bound)
+        out_dim = 1 if out_features is None else int(out_features)
+        self.readout_W = jax.random.uniform(kw, (out_dim, hidden_dim), minval=-bound, maxval=bound)
+        self.readout_b = jax.random.uniform(kb, (out_dim,), minval=-bound, maxval=bound)
         self.hidden_dim = hidden_dim
         self.num_hidden_layers = num_hidden_layers
         self.kind = kind
+        self.out_features = out_features
+
+    def trunk(self, coord, *, film=None):
+        """Return pre-readout hidden features.
+
+        Args:
+            coord: Coordinate vector of shape ``(in_dim,)``.
+            film: Optional FiLM tensor of shape
+                ``(num_hidden_layers, 2 * hidden_dim)`` whose halves provide
+                ``gamma`` and ``beta`` per layer. ``None`` skips modulation.
+
+        Returns:
+            Activations of the final hidden layer, shape ``(hidden_dim,)``.
+        """
+        h = coord
+        for i, layer in enumerate(self.layers):
+            if film is not None:
+                gamma = film[i, : self.hidden_dim]
+                beta = film[i, self.hidden_dim :]
+                h = layer(h, gamma=gamma, beta=beta)
+            else:
+                h = layer(h)
+        return h
+
+    def head(self, h):
+        """Internal linear readout. Not a user extension point."""
+        return self.readout_W @ h + self.readout_b
 
     def __call__(self, x, film=None):
         """Forward pass.
@@ -170,14 +212,10 @@ class BasisBody(eqx.Module):
                 is applied.
 
         Returns:
-            Scalar prediction.
+            Scalar when ``out_features`` is ``None`` or ``1``; otherwise a
+            vector of shape ``(out_features,)``.
         """
-        h = x
-        for i, layer in enumerate(self.layers):
-            if film is not None:
-                gamma = film[i, : self.hidden_dim]
-                beta = film[i, self.hidden_dim :]
-                h = layer(h, gamma=gamma, beta=beta)
-            else:
-                h = layer(h)
-        return (self.readout_W @ h + self.readout_b).squeeze()
+        y = self.head(self.trunk(x, film=film))
+        if self.out_features is None or self.out_features == 1:
+            return y.squeeze()
+        return y
