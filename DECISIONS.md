@@ -49,6 +49,8 @@ Five independent rationales arrived at the same verdict:
 
 **No `kind: str` dispatch.** Activation choice (SIREN/HSIREN/WIRE), encoding choice (Identity/Gaussian/LearnedGaussian/Dyadic), and any future variant family is expressed via concrete subclasses inheriting a thin ABC. Each subclass carries only its own fields (e.g. `WIRELayer` has `s`; `SIRENLayer` doesn't; `LearnedGaussian` has a trainable `sigma`; `Gaussian` doesn't). String discriminators are forbidden in this codebase by convention — they make invalid states constructible, force XLA to compile dead branches, and propagate the anti-pattern into every downstream consumer that touches the type.
 
+**The same prohibition applies at field granularity.** Type-discriminator dispatch via `callable(x)`, `isinstance(x, T)`, or any runtime check on a union field's inferred shape is the same anti-pattern as string discriminators and is also forbidden. The principle: a field is `T` (one type), not `T₁ | T₂` where the consumer dispatches on which arrived. If two semantics need different consumer behaviour, they need different classes. This applies across the library, regardless of whether the discriminator is at class granularity (`kind: str` → SIREN/HSIREN/WIRE) or field granularity (`sigma: float | Callable` → Gaussian/GaussianFromShape). The two cases share the same diagnostic — at the dispatch site the consumer is asking "which variant did I get?" — and the same fix: hoist the discrimination into the type system.
+
 Three reasons spelled out:
 
 1. **Pytree hygiene.** With a single shared class, every layer/encoding carries every variant's fields. A `BasisLayer(kind="siren")` would still pytree-leaf an unused `s` for WIRE's Gaussian-window scalar; JAX optimisers see those unused leaves, allocate optimiser state for them, and (silently) propagate gradients through them. The split puts `s` only on `WIRELayer` — non-WIRE pytrees genuinely don't contain it. Same logic kills the `sigma | sigma_from_shape | learn_sigma` triple-nullable on `Encoding`: each encoding now carries only the parameters its forward pass uses.
@@ -60,6 +62,8 @@ Three reasons spelled out:
 The same logic applies to encoding factories: `gaussian_fixed(2.5)` and `gaussian_from_shape(rule)` and `gaussian_learn()` were three indirections over near-identical record constructions. The class IS the constructor — `Gaussian(rank=..., num_freqs=..., sigma=..., key=...)`, `LearnedGaussian(rank=..., num_freqs=..., key=...)`, `Dyadic(rank=..., num_bands=...)`, `Identity(in_dim=...)`. The `sigma_from_shape: Callable` field is gone too — that was a shape-rule mechanism for per-leaf encoding construction, which is the *renderer's* responsibility (loom calls `Gaussian(sigma=nyquist_sigma(leaf.shape), ...)` per leaf), not the encoding's.
 
 This is a permanent policy. Future contributors hit it at PR review: any new variant family is a new subclass, never a new `kind` value.
+
+**Downstream consumers type against `BasisModule`, not `_Body` or the concrete union.** The `BasisModule` Protocol (in `ondes.basis`, exported from `ondes`) is the documented contract for "any basis body". Custom bases or downstream consumers (e.g. a renderer in `loom`) should type-check against `BasisModule` — not import `_Body` (privacy violation) and not write `SIREN | HSIREN | WIRE` (which is exactly the anti-pattern relapse this section forbids). `BasisModule` is `@runtime_checkable`, so `isinstance(body, BasisModule)` works at runtime when static typing isn't enough.
 
 ## The three-AND-gate (for any future addition)
 

@@ -10,6 +10,7 @@ from ondes.basis import (
     SIREN,
     WIRE,
     Basis,
+    BasisModule,
     HSIRENLayer,
     SIRENLayer,
     WIRELayer,
@@ -121,6 +122,41 @@ def test_wire_layer_s_init_is_threaded():
     # Then: it matches the constructor argument
     layer = WIRELayer(2, 4, 6.0, is_first=True, key=jax.random.PRNGKey(0), s_init=2.5)
     assert float(layer.s) == 2.5
+
+
+def test_wire_body_s_init_threads_to_layers():
+    # Given: a WIRE body constructed with a non-default s_init
+    # When: inspecting the s field on its WIRELayer children
+    # Then: every layer carries the supplied s. Locks the body-to-layer
+    # kwarg-forwarding path: a regression that drops or swallows s_init
+    # leaves layers stuck at the WIRELayer default (3.0).
+    body = WIRE(in_dim=2, hidden_dim=8, num_hidden_layers=3, key=jax.random.PRNGKey(0), s_init=2.5)
+    for layer in body.layers:
+        assert jnp.allclose(layer.s, 2.5)
+
+
+@pytest.mark.parametrize("body_cls,layer_cls", [(SIREN, SIRENLayer), (HSIREN, HSIRENLayer), (WIRE, WIRELayer)])
+def test_body_constructs_correct_layer_type(body_cls, layer_cls):
+    # Given: each body class paired with its expected layer class
+    # When: constructing the body
+    # Then: every layer in body.layers is an instance of the expected class.
+    # Locks the type-dispatch contract — a regression where SIREN accidentally
+    # constructs WIRELayers would be invisible to a "shape works" test but
+    # caught here.
+    body = body_cls(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.PRNGKey(0))
+    for layer in body.layers:
+        assert isinstance(layer, layer_cls)
+
+
+def test_basis_module_protocol_matches_concrete_bodies():
+    # Given: one instance of each concrete body class
+    # When: checking isinstance against the BasisModule Protocol
+    # Then: each body conforms structurally. Downstream consumers (loom) can
+    # type against BasisModule without importing _Body (privacy violation) or
+    # writing SIREN | HSIREN | WIRE (anti-pattern relapse).
+    args = dict(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.PRNGKey(0))
+    for body in (SIREN(**args), HSIREN(**args), WIRE(**args)):
+        assert isinstance(body, BasisModule)
 
 
 def test_basis_body_call_is_jit_compilable():

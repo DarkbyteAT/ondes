@@ -15,6 +15,7 @@ class and share trunk/readout machinery via a private ``_Body`` base.
 """
 
 from abc import abstractmethod
+from typing import Protocol, runtime_checkable
 
 import equinox as eqx
 import jax
@@ -109,20 +110,12 @@ class Basis(eqx.Module):
 class SIRENLayer(Basis):
     """SIREN layer: ``sin(omega * pre)`` (Sitzmann+ 2020)."""
 
-    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key):
-        """Initialise the linear weights and the learnable ``omega``."""
-        super().__init__(in_dim, out_dim, omega_init, is_first, key=key)
-
     def _activate(self, pre):
         return jnp.sin(self.omega * pre)
 
 
 class HSIRENLayer(Basis):
     """H-SIREN layer: ``sin(omega * sinh(pre))`` (Cai & Pan 2024)."""
-
-    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key):
-        """Initialise the linear weights and the learnable ``omega``."""
-        super().__init__(in_dim, out_dim, omega_init, is_first, key=key)
 
     def _activate(self, pre):
         return jnp.sin(self.omega * jnp.sinh(pre))
@@ -146,6 +139,29 @@ class WIRELayer(Basis):
     def _activate(self, pre):
         sz = self.s * pre
         return jnp.cos(self.omega * pre) * jnp.exp(-(sz * sz))
+
+
+@runtime_checkable
+class BasisModule(Protocol):
+    """Public protocol any basis body conforms to.
+
+    Used by downstream renderers (``loom``) and other consumers to type
+    against without importing concrete classes or the private ``_Body``
+    base. ``runtime_checkable`` lets callers use ``isinstance(body,
+    BasisModule)`` at runtime; prefer static typing where possible.
+    """
+
+    out_features: int | None
+    hidden_dim: int
+    num_hidden_layers: int
+
+    def trunk(self, coord, *, film=None) -> jax.Array:
+        """Return pre-readout hidden features (shape ``(hidden_dim,)``)."""
+        ...
+
+    def __call__(self, coord, *, film=None) -> jax.Array:
+        """Forward pass; scalar when ``out_features is None``, vector otherwise."""
+        ...
 
 
 def _validate_body_args(num_hidden_layers, out_features):
@@ -177,7 +193,10 @@ class _Body(eqx.Module):
 
     Concrete subclasses (``SIREN``, ``HSIREN``, ``WIRE``) build their own
     ``layers`` tuple in ``__init__`` and rely on this base for the trunk loop,
-    readout, FiLM dispatch, and ``out_features`` scalar/vector switch.
+    readout, FiLM dispatch, and ``out_features`` scalar/vector switch. Each
+    body's ``__init__`` is written out explicitly rather than dispatched via a
+    shared helper or class attribute — see the user-memory note "Repetition
+    over confusing indirection" (2026-05-17).
 
     ``out_features`` controls the readout width and the return shape of
     ``__call__``: ``None`` (default) or ``1`` gives a scalar, integer ``N > 1``
@@ -279,7 +298,10 @@ class SIREN(_Body):
         for i in range(num_hidden_layers):
             in_d = in_dim if i == 0 else hidden_dim
             o = omega_first if i == 0 else omega_hidden
-            layers.append(SIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))
+            # pyright sees eqx.Module's synthesised dataclass __init__ on
+            # SIRENLayer rather than the inherited Basis.__init__; the inherited
+            # one takes `key`. Runtime is fine (verified via inspect).
+            layers.append(SIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))  # pyright: ignore[reportCallIssue]
         self.layers = tuple(layers)
         self.readout_W, self.readout_b = _build_readout(hidden_dim, omega_hidden, out_features, keys[-1])
         self.out_features = out_features
@@ -318,7 +340,8 @@ class HSIREN(_Body):
         for i in range(num_hidden_layers):
             in_d = in_dim if i == 0 else hidden_dim
             o = omega_first if i == 0 else omega_hidden
-            layers.append(HSIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))
+            # See SIREN.__init__ comment: pyright doesn't see the inherited Basis.__init__.
+            layers.append(HSIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))  # pyright: ignore[reportCallIssue]
         self.layers = tuple(layers)
         self.readout_W, self.readout_b = _build_readout(hidden_dim, omega_hidden, out_features, keys[-1])
         self.out_features = out_features
@@ -329,8 +352,8 @@ class HSIREN(_Body):
 class WIRE(_Body):
     """Stack of ``WIRELayer`` s with an internal linear readout (Saragadam+ 2023).
 
-    Accepts an extra ``s_init`` kwarg (forwarded to each ``WIRELayer``)
-    controlling the initial Gaussian window width. SIREN and H-SIREN do not.
+    Accepts ``s_init`` explicitly (forwarded to each ``WIRELayer``) controlling
+    the initial Gaussian window width. SIREN and H-SIREN do not.
     """
 
     def __init__(
