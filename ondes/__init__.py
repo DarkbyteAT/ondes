@@ -1,31 +1,47 @@
 """ondes — Functional INRs in JAX/Equinox.
 
-Implementations of SIREN, H-SIREN, WIRE basis MLPs, Fourier-feature encodings,
-and the associated init schemes.
+Polymorphic implementations of SIREN, H-SIREN, WIRE basis MLPs, Fourier-feature
+encodings, and the associated init schemes. One class per basis kind, one
+class per encoding kind — no string discriminators, no factory functions.
 """
 
-from ondes.basis import BASIS_KINDS, BasisBody, BasisLayer, siren_init
+from ondes.basis import (
+    HSIREN,
+    SIREN,
+    WIRE,
+    Basis,
+    BasisModule,
+    Body,
+    HSIRENLayer,
+    SIRENLayer,
+    WIRELayer,
+    siren_init,
+)
 from ondes.encoding import (
-    NO_ENCODING,
+    Dyadic,
     Encoding,
-    dyadic,
-    gaussian_fixed,
-    gaussian_from_shape,
-    gaussian_learn,
+    Gaussian,
+    Identity,
+    LearnedGaussian,
     nyquist_sigma,
 )
 
 
 __all__ = [
-    "BASIS_KINDS",
-    "BasisBody",
-    "BasisLayer",
+    "Basis",
+    "BasisModule",
+    "Body",
+    "Dyadic",
     "Encoding",
-    "NO_ENCODING",
-    "dyadic",
-    "gaussian_fixed",
-    "gaussian_from_shape",
-    "gaussian_learn",
+    "Gaussian",
+    "HSIREN",
+    "HSIRENLayer",
+    "Identity",
+    "LearnedGaussian",
+    "SIREN",
+    "SIRENLayer",
+    "WIRE",
+    "WIRELayer",
     "nyquist_sigma",
     "siren_init",
 ]
