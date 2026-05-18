@@ -27,3 +27,4 @@ convention = "google"
 # jaxtyping uses string-literal shape annotations (e.g. Float[Array, "out in"])
 # that ruff parses as forward references; F722/F821 fight that pattern.
 "ondes/basis.py" = ["F722", "F821"]
+"ondes/encoding.py" = ["F722", "F821"]

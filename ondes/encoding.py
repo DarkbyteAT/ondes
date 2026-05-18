@@ -1,23 +1,29 @@
 """Coordinate pre-encodings for INR bodies.
 
-Three kinds are supported via a string discriminator on ``Encoding.kind``:
+Four operational encoding classes — one per family. Each is an
+``eqx.Module`` that materialises its own parameters at construction and acts
+as a callable ``coord → embedded`` map. No kind discriminator, no factory
+functions (the class itself is the constructor).
 
-- ``"none"``     : identity (no pre-encoding).
-- ``"gaussian"`` : Random Fourier Features (Tancik+ 2020) with either a fixed
-  ``sigma``, a per-leaf rule (``sigma_from_shape``), or a learnable scalar
-  ``sigma`` (``learn_sigma=True``).
-- ``"dyadic"``   : NeRF-style positional encoding (Mildenhall+ 2020) with
-  ``num_bands`` octaves per coordinate axis.
+- ``Identity``        : no pre-encoding (the raw coordinate vector).
+- ``Gaussian``        : Random Fourier Features (Tancik+ 2020) with a fixed
+  ``sigma`` baked into the sampled frequency matrix ``B``.
+- ``LearnedGaussian`` : Random Fourier Features with a learnable scalar
+  ``sigma`` applied to a unit-scale ``B_raw`` matrix at every call.
+- ``Dyadic``          : NeRF-style dyadic positional encoding
+  (Mildenhall+ 2020) with ``num_bands`` octaves per coordinate axis.
 
-The factory functions ``gaussian_fixed`` / ``gaussian_from_shape`` /
-``gaussian_learn`` / ``dyadic`` are the recommended entry points; ``NO_ENCODING``
-is a module-level singleton for the identity case.
+Each encoding exposes ``out_dim`` so downstream code (renderers, body
+constructors) can size the first MLP layer without inspecting internals.
 """
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from abc import abstractmethod
 
+import equinox as eqx
+import jax
+import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Array, Float
 
 
 def nyquist_sigma(shape: tuple) -> float:
@@ -38,56 +44,127 @@ def nyquist_sigma(shape: tuple) -> float:
     return float(max(1.0, (max(shape) - 1) / 4))
 
 
-@dataclass(frozen=True)
-class Encoding:
-    """How coordinate inputs are pre-encoded before the body MLP.
+class Encoding(eqx.Module):
+    """ABC for coord pre-encodings.
 
-    Three kinds, each with its own parameters:
+    Subclasses are operational: each is a callable ``coord → embedded`` map
+    and exposes ``out_dim`` so downstream code can size the first body layer
+    without inspecting internals.
 
-    - ``kind="none"``     : raw coordinate vector (default).
-    - ``kind="gaussian"`` : Random Fourier Features (Tancik 2020). Use ``sigma``
-      for a fixed scale, ``sigma_from_shape`` for a per-leaf rule, or
-      ``learn_sigma=True`` to make ``sigma`` a learnable scalar (initialised at
-      ``sigma``, defaults to ``pi``).
-    - ``kind="dyadic"``   : NeRF-style dyadic positional encoding with
-      ``num_bands`` octaves per coordinate axis.
-
-    Attributes:
-        kind: Discriminator string (``"none"`` / ``"gaussian"`` / ``"dyadic"``).
-        sigma: Fixed Gaussian scale, or initial value when ``learn_sigma``.
-        sigma_from_shape: Callable mapping a weight shape tuple to a ``sigma``.
-        learn_sigma: Whether ``sigma`` is a trainable scalar.
-        num_bands: Number of octaves for dyadic encoding.
+    Not instantiable on its own — calling it triggers the
+    ``NotImplementedError`` in ``__call__``/``out_dim``.
     """
 
-    # TODO(ondes/0.2): consider ABC + Gaussian/Dyadic/Identity subclasses per
-    # loom/CRITIQUE.md section 1c. Current string discriminator is a known
-    # design smell preserved verbatim during the initial extraction.
-    kind: str = "none"
-    sigma: float | None = None
-    sigma_from_shape: Callable | None = None
-    learn_sigma: bool = False
-    num_bands: int = 4
+    @property
+    @abstractmethod
+    def out_dim(self) -> int:
+        """Dimension of the encoded coordinate vector."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def __call__(self, coord):
+        """Encode ``coord`` into a ``(out_dim,)`` vector."""
+        raise NotImplementedError
 
 
-NO_ENCODING = Encoding(kind="none")
+class Identity(Encoding):
+    """No pre-encoding. ``coord`` flows straight through."""
+
+    in_dim: int = eqx.field(static=True)
+
+    def __init__(self, in_dim: int):
+        """Store the coordinate dimension so ``out_dim`` can report it."""
+        self.in_dim = in_dim
+
+    @property
+    def out_dim(self) -> int:
+        """Coordinate dimension passed straight through."""
+        return self.in_dim
+
+    def __call__(self, coord):
+        """Return ``coord`` unchanged."""
+        return coord
 
 
-def gaussian_fixed(sigma: float) -> Encoding:
-    """Build a Gaussian RFF encoding with a fixed ``sigma``."""
-    return Encoding(kind="gaussian", sigma=float(sigma))
+class Gaussian(Encoding):
+    """Random Fourier Features (Tancik+ 2020) with a fixed sigma.
+
+    The frequency matrix ``B`` is sampled from ``N(0, sigma^2)`` at
+    construction. ``sigma`` is not retained on the module after construction;
+    it has already been folded into ``B``. To recover the spectral scale, use
+    ``jnp.std(self.B)`` (or pre-compute and carry it externally).
+    """
+
+    B: Float[Array, "num_freqs rank"]
+
+    def __init__(self, rank: int, num_freqs: int, sigma: float, *, key):
+        """Sample ``B`` from ``N(0, sigma^2)`` of shape ``(num_freqs, rank)``."""
+        self.B = sigma * jax.random.normal(key, (num_freqs, rank))
+
+    @property
+    def out_dim(self) -> int:
+        """``2 * num_freqs`` — sin and cos features per sampled frequency."""
+        return 2 * self.B.shape[0]
+
+    def __call__(self, coord):
+        """Encode ``coord`` as ``[cos(2*pi*B@coord), sin(2*pi*B@coord)]``."""
+        angles = 2.0 * jnp.pi * (self.B @ coord)
+        return jnp.concatenate([jnp.cos(angles), jnp.sin(angles)])
 
 
-def gaussian_from_shape(rule: Callable) -> Encoding:
-    """Build a Gaussian RFF encoding whose ``sigma`` is derived per leaf via ``rule``."""
-    return Encoding(kind="gaussian", sigma_from_shape=rule)
+class LearnedGaussian(Encoding):
+    """Random Fourier Features with a learnable scalar sigma.
+
+    ``B_raw`` is sampled once at unit scale; ``sigma`` is a learnable scalar
+    applied at every call. ``sigma`` IS a pytree leaf so that
+    ``eqx.partition``/``filter_grad`` treat it as trainable.
+    """
+
+    B_raw: Float[Array, "num_freqs rank"]
+    sigma: Float[Array, ""]
+
+    def __init__(self, rank: int, num_freqs: int, *, key, sigma_init: float = float(np.pi)):
+        """Sample unit-scale ``B_raw`` and initialise the learnable ``sigma``."""
+        self.B_raw = jax.random.normal(key, (num_freqs, rank))
+        self.sigma = jnp.array(float(sigma_init))
+
+    @property
+    def out_dim(self) -> int:
+        """``2 * num_freqs`` — sin and cos features per sampled frequency."""
+        return 2 * self.B_raw.shape[0]
+
+    def __call__(self, coord):
+        """Encode ``coord`` with ``B = sigma * B_raw`` applied at call-time."""
+        B = self.sigma * self.B_raw
+        angles = 2.0 * jnp.pi * (B @ coord)
+        return jnp.concatenate([jnp.cos(angles), jnp.sin(angles)])
 
 
-def gaussian_learn(init: float = float(np.pi)) -> Encoding:
-    """Build a Gaussian RFF encoding with a learnable ``sigma`` initialised at ``init``."""
-    return Encoding(kind="gaussian", sigma=init, learn_sigma=True)
+class Dyadic(Encoding):
+    """NeRF positional encoding (Mildenhall+ 2020).
 
+    Per-axis dyadic sinusoidal: ``num_bands`` octaves per coordinate axis,
+    output is ``rank * 2 * num_bands`` features (sin and cos per axis per
+    band).
+    """
 
-def dyadic(L: int = 4) -> Encoding:
-    """Build a dyadic positional encoding with ``L`` octaves per axis."""
-    return Encoding(kind="dyadic", num_bands=L)
+    rank: int = eqx.field(static=True)
+    num_bands: int = eqx.field(static=True)
+
+    def __init__(self, rank: int, num_bands: int = 4):
+        """Store the coordinate rank and number of octave bands."""
+        self.rank = rank
+        self.num_bands = num_bands
+
+    @property
+    def out_dim(self) -> int:
+        """``rank * 2 * num_bands`` — sin and cos per (axis, band) pair."""
+        return self.rank * 2 * self.num_bands
+
+    def __call__(self, coord):
+        """Encode ``coord`` with dyadic per-axis sinusoidals at ``2**k * pi`` for k in ``range(num_bands)``."""
+        bands = (2.0 ** jnp.arange(self.num_bands)) * jnp.pi
+        angles = coord[:, None] * bands[None, :]
+        sins = jnp.sin(angles)
+        coss = jnp.cos(angles)
+        return jnp.stack([sins, coss], axis=-1).reshape(-1)
