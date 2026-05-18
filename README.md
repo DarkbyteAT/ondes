@@ -16,7 +16,7 @@ pip install ondes
 
 ## Composition
 
-`ondes` ships the basis-MLP trunk and the spectral init machinery. Anything post-trunk — distribution heads, parameterisations, rotation maps, vector fields, loss-specific transforms — lives in user code, wrapped around an `ondes.BasisBody` inside your own `eqx.Module`:
+`ondes` ships the basis-MLP trunks (`SIREN`, `HSIREN`, `WIRE`) and the spectral init machinery. Anything post-trunk — distribution heads, parameterisations, rotation maps, vector fields, loss-specific transforms — lives in user code, wrapped around a concrete body inside your own `eqx.Module`. Type-annotate against the `ondes.Body` ABC if your wrapper should accept any basis kind:
 
 ```python
 import equinox as eqx
@@ -29,7 +29,7 @@ import ondes
 class Model(eqx.Module):
     """Compose an ondes INR with whatever readout/head you want."""
 
-    inr: ondes.BasisBody
+    inr: ondes.Body
 
     def __call__(self, coord):
         features = self.inr(coord)
@@ -40,9 +40,7 @@ class Model(eqx.Module):
 
 
 key = jax.random.PRNGKey(0)
-inr = ondes.BasisBody(
-    in_dim=2, hidden_dim=64, num_hidden_layers=4, kind="siren", key=key
-)
+inr = ondes.SIREN(in_dim=2, hidden_dim=64, num_hidden_layers=4, key=key)
 model = Model(inr=inr)
 ```
 
