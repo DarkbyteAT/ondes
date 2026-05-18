@@ -22,6 +22,7 @@ import time
 
 import equinox as eqx
 import jax
+import pytest
 
 from ondes import SIREN
 
@@ -59,6 +60,7 @@ def _time_jit_vmap(body, batch, n_warmup=50, n_iters=100):
     return statistics.median(samples), statistics.stdev(samples)
 
 
+@pytest.mark.benchmark
 def test_forward_pass_microbenchmark(capsys):
     # Given: a canonical SIREN body (in_dim=2, hidden_dim=64, num_hidden_layers=4)
     # When: timing JIT-compiled jax.vmap over a batch of 1024 coords
