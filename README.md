@@ -16,12 +16,11 @@ pip install ondes
 
 ## Composition
 
-`ondes` ships the basis-MLP trunks (`SIREN`, `HSIREN`, `WIRE`) and the spectral init machinery. Anything post-trunk — distribution heads, parameterisations, rotation maps, vector fields, loss-specific transforms — lives in user code, wrapped around a concrete body inside your own `eqx.Module`. Type-annotate against the `ondes.Body` ABC if your wrapper should accept any basis kind:
+`ondes` ships the basis-MLP trunks (`SIREN`, `HSIREN`, `WIRE`) and the spectral init machinery. Anything post-trunk — distribution heads, parameterisations, rotation maps, vector fields, loss-specific transforms — lives in user code, wrapped around a concrete body inside your own `eqx.Module`. Type-annotate against the `ondes.Body` base class if your wrapper should accept any basis kind:
 
 ```python
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 
 import ondes
 
@@ -39,7 +38,7 @@ class Model(eqx.Module):
         return features
 
 
-key = jax.random.PRNGKey(0)
+key = jax.random.key(0)
 inr = ondes.SIREN(in_dim=2, hidden_dim=64, num_hidden_layers=4, key=key)
 model = Model(inr=inr)
 ```
