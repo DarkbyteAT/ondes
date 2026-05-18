@@ -150,6 +150,22 @@ def test_dyadic_default_num_bands_is_four():
     assert enc.out_dim == 3 * 2 * 4
 
 
+def test_dyadic_bands_precomputed_as_pytree_leaf():
+    # Given: a Dyadic encoding
+    # When: inspecting bands and partitioning via eqx.is_array
+    # Then: bands has shape (num_bands,) with values 2**k * pi for k in
+    # range(num_bands), and is a real pytree array leaf — proves the
+    # precomputation moves work out of __call__ into __init__ without
+    # silently dropping the values from the pytree.
+    enc = Dyadic(rank=2, num_bands=5)
+    expected = (2.0 ** jnp.arange(5)) * jnp.pi
+    assert enc.bands.shape == (5,)
+    assert jnp.allclose(enc.bands, expected)
+    arrays, _ = eqx.partition(enc, eqx.is_array)
+    leaves = [leaf for leaf in jax.tree_util.tree_leaves(arrays) if eqx.is_array(leaf)]
+    assert any(leaf.shape == (5,) for leaf in leaves), "bands not in pytree"
+
+
 @pytest.mark.parametrize("cls", ENCODING_CLASSES)
 def test_encoding_subclass_of_abc(cls):
     # Given: each concrete encoding class

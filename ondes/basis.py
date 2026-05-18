@@ -207,22 +207,29 @@ def _build_readout(hidden_dim, omega_hidden, out_features, key):
 
 
 class Body(eqx.Module):
-    """Shared trunk/readout base for all basis bodies.
+    """Public base class for any basis body.
 
-    Public, symmetric with the ``Basis`` and ``Encoding`` ABCs — downstream
-    consumers (e.g. ``loom`` renderers) can type-annotate against ``Body``
-    when they want to accept any concrete basis body. **Not intended for
-    external subclassing**: the shipped concrete subclasses (``SIREN``,
-    ``HSIREN``, ``WIRE``) are the only well-tested ways to use the body
-    machinery, and new variants should normally be a SIREN/HSIREN/WIRE
-    subclass rather than a fresh ``Body`` subclass.
+    Subclass this directly to implement a new basis family with custom
+    activation layers — see ``SIREN`` / ``HSIREN`` / ``WIRE`` for examples
+    of the pattern (build a ``layers`` tuple of your own ``Basis`` subclass
+    in ``__init__``, call ``_validate_body_args`` and ``_build_readout`` to
+    satisfy the ``Body`` invariants, assign the structural fields).
 
-    Concrete subclasses (``SIREN``, ``HSIREN``, ``WIRE``) build their own
-    ``layers`` tuple in ``__init__`` and rely on this base for the trunk loop,
-    readout, FiLM dispatch, and ``out_features`` scalar/vector switch. Each
-    body's ``__init__`` is written out explicitly rather than dispatched via a
-    shared helper or class attribute — see the user-memory note "Repetition
-    over confusing indirection" (2026-05-17).
+    Symmetric with the ``Basis`` and ``Encoding`` ABCs — downstream consumers
+    (e.g. ``loom`` renderers) can type-annotate against ``Body`` to accept
+    *any* basis body, including user-defined ones, or against
+    ``BasisModule`` for structural-typing flexibility.
+
+    **Don't subclass the concrete bodies externally.** ``SIREN``, ``HSIREN``,
+    ``WIRE`` are specific basis instantiations (sin / sinh-sin / Gabor); a
+    new basis family (Gabor variants, hash-grid, learned Fourier features as
+    activation, etc.) should subclass ``Body`` directly with its own
+    ``Basis`` subclass, not subclass an existing concrete body whose
+    semantics it doesn't share.
+
+    Each body's ``__init__`` is written out explicitly rather than dispatched
+    via a shared helper or class attribute — see the user-memory note
+    "Repetition over confusing indirection" (2026-05-17).
 
     ``out_features`` controls the readout width and the return shape of
     ``__call__``: ``None`` (default) or ``1`` gives a scalar, integer ``N > 1``

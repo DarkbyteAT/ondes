@@ -160,11 +160,15 @@ class Dyadic(Encoding):
 
     rank: int = eqx.field(static=True)
     num_bands: int = eqx.field(static=True)
+    bands: Float[Array, "num_bands"]
 
     def __init__(self, rank: int, num_bands: int = 4):
-        """Store the coordinate rank and number of octave bands."""
+        """Store the coordinate rank, octave count, and pre-computed band frequencies."""
         self.rank = rank
         self.num_bands = num_bands
+        # Pre-compute once; ``bands`` is a tiny ``(num_bands,)`` pytree leaf
+        # so jit/grad see it but the forward pass skips the recomputation.
+        self.bands = (2.0 ** jnp.arange(num_bands)) * jnp.pi
 
     @property
     def out_dim(self) -> int:
@@ -173,8 +177,7 @@ class Dyadic(Encoding):
 
     def __call__(self, coord):
         """Encode ``coord`` with dyadic per-axis sinusoidals at ``2**k * pi`` for k in ``range(num_bands)``."""
-        bands = (2.0 ** jnp.arange(self.num_bands)) * jnp.pi
-        angles = coord[:, None] * bands[None, :]
+        angles = coord[:, None] * self.bands[None, :]
         sins = jnp.sin(angles)
         coss = jnp.cos(angles)
         return jnp.stack([sins, coss], axis=-1).reshape(-1)
