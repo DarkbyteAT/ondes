@@ -11,6 +11,7 @@ from ondes.basis import (
     WIRE,
     Basis,
     BasisModule,
+    Body,
     HSIRENLayer,
     SIRENLayer,
     WIRELayer,
@@ -29,6 +30,7 @@ from ondes.encoding import (
 __all__ = [
     "Basis",
     "BasisModule",
+    "Body",
     "Dyadic",
     "Encoding",
     "Gaussian",

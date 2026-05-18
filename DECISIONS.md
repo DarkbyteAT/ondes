@@ -10,7 +10,8 @@ A short, citable record of the design decisions that shape the public surface of
 
 - `Basis` — ABC for a single basis-MLP layer; exposes the shared linear + FiLM pre-activation and the abstract `_activate` hook subclasses override.
 - `SIRENLayer`, `HSIRENLayer`, `WIRELayer` — concrete layer subclasses, one per basis family. Only `WIRELayer` carries the basis-specific learnable scalar `s`.
-- `SIREN`, `HSIREN`, `WIRE` — basis-MLP trunks (`eqx.Module`, callable). Each constructs the matching layer subclass and shares trunk/readout machinery via a private `_Body` base. `WIRE.__init__` accepts an extra `s_init` kwarg; `SIREN` and `HSIREN` do not.
+- `Body` — public base for basis-MLP trunks; exposes `trunk()`, `__call__`, the readout, FiLM dispatch, and `out_features` scalar/vector switch. Symmetric with `Basis` and `Encoding`. Not intended for external subclassing — new variants should subclass `SIREN`/`HSIREN`/`WIRE`, not `Body` directly.
+- `SIREN`, `HSIREN`, `WIRE` — basis-MLP trunks (`eqx.Module`, callable, inherit `Body`). Each constructs the matching layer subclass. `WIRE.__init__` accepts an extra `s_init` kwarg; `SIREN` and `HSIREN` do not.
 - `Encoding` — ABC for coord pre-encodings; exposes an `out_dim` property and `__call__(coord)` abstract method.
 - `Identity`, `Gaussian`, `LearnedGaussian`, `Dyadic` — concrete encoding subclasses. Each is *operational* (materialises its own parameters at construction and acts as a callable `coord → embedded` map). The class itself is the constructor; there are no factory functions. `Gaussian` bakes `sigma` into the sampled `B` matrix at construction; `LearnedGaussian` carries `B_raw` + a learnable scalar `sigma` so optimisers update the spectral scale through gradients.
 - `siren_init`, `nyquist_sigma` — init primitives `ondes` consumes internally.
@@ -63,7 +64,7 @@ The same logic applies to encoding factories: `gaussian_fixed(2.5)` and `gaussia
 
 This is a permanent policy. Future contributors hit it at PR review: any new variant family is a new subclass, never a new `kind` value.
 
-**Downstream consumers type against `BasisModule`, not `_Body` or the concrete union.** The `BasisModule` Protocol (in `ondes.basis`, exported from `ondes`) is the documented contract for "any basis body". Custom bases or downstream consumers (e.g. a renderer in `loom`) should type-check against `BasisModule` — not import `_Body` (privacy violation) and not write `SIREN | HSIREN | WIRE` (which is exactly the anti-pattern relapse this section forbids). `BasisModule` is `@runtime_checkable`, so `isinstance(body, BasisModule)` works at runtime when static typing isn't enough.
+**Downstream consumers type against `Body` or `BasisModule`, never the concrete union.** Two valid choices: `Body` for nominal typing (the concrete public base; what every shipped basis body inherits) or `BasisModule` for structural typing (the `Protocol`; matches any duck-typed body including user-defined wrappers). Both are public and documented. What's forbidden is `SIREN | HSIREN | WIRE` (the anti-pattern relapse this section closes — the union grows every time a new basis lands, every downstream consumer pays the cost). `BasisModule` is `@runtime_checkable`, so `isinstance(body, BasisModule)` works at runtime when static typing isn't enough.
 
 ## The three-AND-gate (for any future addition)
 

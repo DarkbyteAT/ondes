@@ -11,7 +11,7 @@ unused ``s`` leaf.
 - ``WIRELayer``   : ``cos(omega * z) * exp(-(s * z) ** 2)`` (Saragadam+ 2023)
 
 Bodies (``SIREN``, ``HSIREN``, ``WIRE``) each construct the matching layer
-class and share trunk/readout machinery via a private ``_Body`` base.
+class and share trunk/readout machinery via the public ``Body`` base.
 """
 
 from abc import abstractmethod
@@ -110,12 +110,26 @@ class Basis(eqx.Module):
 class SIRENLayer(Basis):
     """SIREN layer: ``sin(omega * pre)`` (Sitzmann+ 2020)."""
 
+    # Explicit pass-through __init__ so pyright sees concrete signatures on
+    # subclasses (eqx.Module + ABC machinery confuses static analysis).
+    # DO NOT delete — see DECISIONS.md §"Polymorphism over discriminators".
+    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key):
+        """Initialise the linear weights and the learnable ``omega``."""
+        super().__init__(in_dim, out_dim, omega_init, is_first, key=key)
+
     def _activate(self, pre):
         return jnp.sin(self.omega * pre)
 
 
 class HSIRENLayer(Basis):
     """H-SIREN layer: ``sin(omega * sinh(pre))`` (Cai & Pan 2024)."""
+
+    # Explicit pass-through __init__ so pyright sees concrete signatures on
+    # subclasses (eqx.Module + ABC machinery confuses static analysis).
+    # DO NOT delete — see DECISIONS.md §"Polymorphism over discriminators".
+    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key):
+        """Initialise the linear weights and the learnable ``omega``."""
+        super().__init__(in_dim, out_dim, omega_init, is_first, key=key)
 
     def _activate(self, pre):
         return jnp.sin(self.omega * jnp.sinh(pre))
@@ -145,9 +159,13 @@ class WIRELayer(Basis):
 class BasisModule(Protocol):
     """Public protocol any basis body conforms to.
 
-    Used by downstream renderers (``loom``) and other consumers to type
-    against without importing concrete classes or the private ``_Body``
-    base. ``runtime_checkable`` lets callers use ``isinstance(body,
+    Two equally-valid ways to type against "any basis body" downstream:
+    annotate with ``BasisModule`` (this Protocol, structural typing) or
+    annotate with ``Body`` (the concrete public base, nominal typing).
+    Use ``BasisModule`` for callers that want to accept duck-typed bodies
+    (e.g. user-defined wrappers that don't subclass ``Body``); use
+    ``Body`` when you specifically want a ``Body`` subclass.
+    ``runtime_checkable`` lets callers use ``isinstance(body,
     BasisModule)`` at runtime; prefer static typing where possible.
     """
 
@@ -188,8 +206,16 @@ def _build_readout(hidden_dim, omega_hidden, out_features, key):
     return readout_W, readout_b
 
 
-class _Body(eqx.Module):
-    """Private base — shared trunk/readout machinery. Don't subclass externally.
+class Body(eqx.Module):
+    """Shared trunk/readout base for all basis bodies.
+
+    Public, symmetric with the ``Basis`` and ``Encoding`` ABCs — downstream
+    consumers (e.g. ``loom`` renderers) can type-annotate against ``Body``
+    when they want to accept any concrete basis body. **Not intended for
+    external subclassing**: the shipped concrete subclasses (``SIREN``,
+    ``HSIREN``, ``WIRE``) are the only well-tested ways to use the body
+    machinery, and new variants should normally be a SIREN/HSIREN/WIRE
+    subclass rather than a fresh ``Body`` subclass.
 
     Concrete subclasses (``SIREN``, ``HSIREN``, ``WIRE``) build their own
     ``layers`` tuple in ``__init__`` and rely on this base for the trunk loop,
@@ -264,7 +290,7 @@ class _Body(eqx.Module):
         return y
 
 
-class SIREN(_Body):
+class SIREN(Body):
     """Stack of ``SIRENLayer`` s with an internal linear readout (Sitzmann+ 2020)."""
 
     def __init__(
@@ -298,10 +324,7 @@ class SIREN(_Body):
         for i in range(num_hidden_layers):
             in_d = in_dim if i == 0 else hidden_dim
             o = omega_first if i == 0 else omega_hidden
-            # pyright sees eqx.Module's synthesised dataclass __init__ on
-            # SIRENLayer rather than the inherited Basis.__init__; the inherited
-            # one takes `key`. Runtime is fine (verified via inspect).
-            layers.append(SIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))  # pyright: ignore[reportCallIssue]
+            layers.append(SIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))
         self.layers = tuple(layers)
         self.readout_W, self.readout_b = _build_readout(hidden_dim, omega_hidden, out_features, keys[-1])
         self.out_features = out_features
@@ -309,7 +332,7 @@ class SIREN(_Body):
         self.num_hidden_layers = num_hidden_layers
 
 
-class HSIREN(_Body):
+class HSIREN(Body):
     """Stack of ``HSIRENLayer`` s with an internal linear readout (Cai & Pan 2024)."""
 
     def __init__(
@@ -340,8 +363,7 @@ class HSIREN(_Body):
         for i in range(num_hidden_layers):
             in_d = in_dim if i == 0 else hidden_dim
             o = omega_first if i == 0 else omega_hidden
-            # See SIREN.__init__ comment: pyright doesn't see the inherited Basis.__init__.
-            layers.append(HSIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))  # pyright: ignore[reportCallIssue]
+            layers.append(HSIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))
         self.layers = tuple(layers)
         self.readout_W, self.readout_b = _build_readout(hidden_dim, omega_hidden, out_features, keys[-1])
         self.out_features = out_features
@@ -349,7 +371,7 @@ class HSIREN(_Body):
         self.num_hidden_layers = num_hidden_layers
 
 
-class WIRE(_Body):
+class WIRE(Body):
     """Stack of ``WIRELayer`` s with an internal linear readout (Saragadam+ 2023).
 
     Accepts ``s_init`` explicitly (forwarded to each ``WIRELayer``) controlling

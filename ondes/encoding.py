@@ -68,7 +68,17 @@ class Encoding(eqx.Module):
 
 
 class Identity(Encoding):
-    """No pre-encoding. ``coord`` flows straight through."""
+    """No pre-encoding. ``coord`` flows straight through.
+
+    Identity is the only encoding that takes ``in_dim`` explicitly. Other
+    encodings derive ``out_dim`` from their own constructor args
+    (``num_freqs`` for Gaussian/LearnedGaussian, ``rank * 2 * num_bands``
+    for Dyadic) without needing to know the coord dimension. Identity has
+    no such intrinsic; its ``out_dim`` depends entirely on what flows
+    through it. Keeping ``in_dim`` on the encoding (rather than inferring
+    it at call time) lets downstream consumers size the first MLP layer
+    via ``encoding.out_dim`` without already holding a coord.
+    """
 
     in_dim: int = eqx.field(static=True)
 

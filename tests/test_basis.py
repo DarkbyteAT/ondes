@@ -11,6 +11,7 @@ from ondes.basis import (
     WIRE,
     Basis,
     BasisModule,
+    Body,
     HSIRENLayer,
     SIRENLayer,
     WIRELayer,
@@ -152,11 +153,21 @@ def test_basis_module_protocol_matches_concrete_bodies():
     # Given: one instance of each concrete body class
     # When: checking isinstance against the BasisModule Protocol
     # Then: each body conforms structurally. Downstream consumers (loom) can
-    # type against BasisModule without importing _Body (privacy violation) or
-    # writing SIREN | HSIREN | WIRE (anti-pattern relapse).
+    # type against BasisModule (structural) or Body (nominal) without writing
+    # SIREN | HSIREN | WIRE (the anti-pattern relapse).
     args = dict(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.PRNGKey(0))
     for body in (SIREN(**args), HSIREN(**args), WIRE(**args)):
         assert isinstance(body, BasisModule)
+
+
+def test_concrete_bodies_subclass_body_base():
+    # Given: one instance of each concrete body class
+    # When: checking isinstance against the public Body base
+    # Then: each is a Body subclass. Nominal-typing complement to the
+    # BasisModule Protocol test above; downstream code can pick either.
+    args = dict(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.PRNGKey(0))
+    for body in (SIREN(**args), HSIREN(**args), WIRE(**args)):
+        assert isinstance(body, Body)
 
 
 def test_basis_body_call_is_jit_compilable():
