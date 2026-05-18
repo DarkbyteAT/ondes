@@ -1,13 +1,21 @@
-"""SIREN / H-SIREN / WIRE basis layers and the composed body MLP.
+"""SIREN / H-SIREN / WIRE basis layers and bodies.
 
-The three supported activations are:
+One class per basis family. Each layer subclass inherits the shared linear +
+FiLM pre-activation from ``Basis`` and overrides ``_activate`` to produce its
+post-activation output. ``WIRELayer`` is the only layer that carries the
+WIRE-specific learnable scalar ``s`` — non-WIRE pytrees do not contain an
+unused ``s`` leaf.
 
-- ``siren``  : ``sin(omega * z)`` (Sitzmann+ 2020)
-- ``hsiren`` : ``sin(omega * sinh(z))`` (Cai & Pan 2024)
-- ``wire``   : ``cos(omega * z) * exp(-(s * z) ** 2)`` (Saragadam+ 2023)
+- ``SIRENLayer``  : ``sin(omega * z)`` (Sitzmann+ 2020)
+- ``HSIRENLayer`` : ``sin(omega * sinh(z))`` (Cai & Pan 2024)
+- ``WIRELayer``   : ``cos(omega * z) * exp(-(s * z) ** 2)`` (Saragadam+ 2023)
 
-``omega`` (all bases) and ``s`` (WIRE) are stored as learnable scalars per layer.
+Bodies (``SIREN``, ``HSIREN``, ``WIRE``) each construct the matching layer
+class and share trunk/readout machinery via the public ``Body`` base.
 """
+
+from abc import abstractmethod
+from typing import Protocol, runtime_checkable
 
 import equinox as eqx
 import jax
@@ -15,11 +23,8 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 
-BASIS_KINDS = ("siren", "hsiren", "wire")
-
-
 def siren_init(in_dim, out_dim, omega, is_first, key):
-    """Sample (W, b) under the SIREN initialisation scheme.
+    """Sample ``(W, b)`` under the SIREN initialisation scheme.
 
     First-layer weights are drawn uniformly from ``[-1/in_dim, 1/in_dim]``;
     subsequent layers from ``[-sqrt(6/in_dim)/omega, +sqrt(6/in_dim)/omega]``,
@@ -42,16 +47,21 @@ def siren_init(in_dim, out_dim, omega, is_first, key):
     return W, b
 
 
-class BasisLayer(eqx.Module):
-    """One basis-MLP layer with kind-dispatched activation.
+class Basis(eqx.Module):
+    """ABC for a single basis-MLP layer.
 
-    Computes ``y = activation(omega * pre [, s * pre])`` where
-    ``pre = gamma * (W x + b) + beta``. ``omega`` is learnable for every basis;
-    ``s`` is meaningfully used only by WIRE but is stored for every layer so
-    the pytree structure is uniform across kinds.
+    Holds the linear weights ``(W, b)`` and the learnable frequency scalar
+    ``omega`` shared by every basis. Subclasses provide ``_activate(pre)`` to
+    produce the post-activation output. Basis-specific fields (e.g. ``s`` for
+    WIRE) live on the concrete subclass, not here.
+
+    The ``Basis`` ABC is exported so downstream code (renderers, optimisers,
+    test helpers) can express "any basis layer" in a single type. It is not
+    instantiable on its own — calling it triggers the ``NotImplementedError``
+    in ``_activate``.
 
     Note:
-        Earlier revisions stored ``omega`` and ``s`` in log-space to enforce
+        Earlier revisions stored ``omega`` (and ``s``) in log-space to enforce
         positivity. That was abandoned because ``dL/d(log omega) = omega * dL/d omega``
         couples the effective step size to the current ``omega`` magnitude.
         The activations are even/symmetric in ``omega`` (sin, sinh-then-sin,
@@ -61,29 +71,29 @@ class BasisLayer(eqx.Module):
     W: Float[Array, "out in"]
     b: Float[Array, "out"]
     omega: Float[Array, ""]
-    s: Float[Array, ""]
-    kind: str = eqx.field(static=True)
     is_first: bool = eqx.field(static=True)
 
-    def __init__(self, in_dim, out_dim, omega_init, kind, is_first, *, key, s_init=3.0):
-        """Initialise a single basis layer.
-
-        Args:
-            in_dim: Input dimension.
-            out_dim: Output dimension.
-            omega_init: Initial value for the learnable frequency scalar.
-            kind: One of ``BASIS_KINDS``.
-            is_first: Whether this layer is the input layer of the body.
-            key: JAX PRNG key.
-            s_init: Initial value for the learnable WIRE gaussian-width scalar.
-        """
+    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key):
+        """Initialise the linear weights and the learnable ``omega``."""
         self.W, self.b = siren_init(in_dim, out_dim, omega_init, is_first, key)
         self.omega = jnp.array(float(omega_init))
-        self.s = jnp.array(float(s_init))
-        self.kind = kind
         self.is_first = is_first
 
-    def __call__(self, x, gamma=None, beta=None):
+    def _pre(self, x, gamma=None, beta=None):
+        """Apply the linear map and optional FiLM modulation."""
+        pre = self.W @ x + self.b
+        if gamma is not None:
+            pre = gamma * pre
+        if beta is not None:
+            pre = pre + beta
+        return pre
+
+    @abstractmethod
+    def _activate(self, pre):
+        """Apply the basis-specific activation to ``pre``."""
+        raise NotImplementedError
+
+    def __call__(self, x, *, gamma=None, beta=None):
         """Apply the layer to ``x`` with optional FiLM modulation.
 
         Args:
@@ -94,23 +104,132 @@ class BasisLayer(eqx.Module):
         Returns:
             Activated output of shape ``(out_dim,)``.
         """
-        pre = self.W @ x + self.b
-        if gamma is not None:
-            pre = gamma * pre
-        if beta is not None:
-            pre = pre + beta
-        if self.kind == "siren":
-            return jnp.sin(self.omega * pre)
-        if self.kind == "hsiren":
-            return jnp.sin(self.omega * jnp.sinh(pre))
-        if self.kind == "wire":
-            sz = self.s * pre
-            return jnp.cos(self.omega * pre) * jnp.exp(-(sz * sz))
-        raise ValueError(f"unknown basis kind {self.kind!r}")
+        return self._activate(self._pre(x, gamma=gamma, beta=beta))
 
 
-class BasisBody(eqx.Module):
-    """Stack of ``BasisLayer`` s with an internal linear readout.
+class SIRENLayer(Basis):
+    """SIREN layer: ``sin(omega * pre)`` (Sitzmann+ 2020)."""
+
+    # Explicit pass-through __init__ so pyright sees concrete signatures on
+    # subclasses (eqx.Module + ABC machinery confuses static analysis).
+    # DO NOT delete — see DECISIONS.md §"Polymorphism over discriminators".
+    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key):
+        """Initialise the linear weights and the learnable ``omega``."""
+        super().__init__(in_dim, out_dim, omega_init, is_first, key=key)
+
+    def _activate(self, pre):
+        return jnp.sin(self.omega * pre)
+
+
+class HSIRENLayer(Basis):
+    """H-SIREN layer: ``sin(omega * sinh(pre))`` (Cai & Pan 2024)."""
+
+    # Explicit pass-through __init__ so pyright sees concrete signatures on
+    # subclasses (eqx.Module + ABC machinery confuses static analysis).
+    # DO NOT delete — see DECISIONS.md §"Polymorphism over discriminators".
+    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key):
+        """Initialise the linear weights and the learnable ``omega``."""
+        super().__init__(in_dim, out_dim, omega_init, is_first, key=key)
+
+    def _activate(self, pre):
+        return jnp.sin(self.omega * jnp.sinh(pre))
+
+
+class WIRELayer(Basis):
+    """WIRE layer: ``cos(omega * pre) * exp(-(s * pre) ** 2)`` (Saragadam+ 2023).
+
+    Carries an additional learnable scalar ``s`` controlling the Gaussian
+    window width. ``s`` lives only on this subclass — SIREN and H-SIREN
+    pytrees do not contain an unused ``s`` leaf.
+    """
+
+    s: Float[Array, ""]
+
+    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key, s_init=3.0):
+        """Initialise the linear weights, ``omega``, and the WIRE-specific ``s``."""
+        super().__init__(in_dim, out_dim, omega_init, is_first, key=key)
+        self.s = jnp.array(float(s_init))
+
+    def _activate(self, pre):
+        sz = self.s * pre
+        return jnp.cos(self.omega * pre) * jnp.exp(-(sz * sz))
+
+
+@runtime_checkable
+class BasisModule(Protocol):
+    """Public protocol any basis body conforms to.
+
+    Two equally-valid ways to type against "any basis body" downstream:
+    annotate with ``BasisModule`` (this Protocol, structural typing) or
+    annotate with ``Body`` (the concrete public base, nominal typing).
+    Use ``BasisModule`` for callers that want to accept duck-typed bodies
+    (e.g. user-defined wrappers that don't subclass ``Body``); use
+    ``Body`` when you specifically want a ``Body`` subclass.
+    ``runtime_checkable`` lets callers use ``isinstance(body,
+    BasisModule)`` at runtime; prefer static typing where possible.
+    """
+
+    out_features: int | None
+    hidden_dim: int
+    num_hidden_layers: int
+
+    def trunk(self, coord, *, film=None) -> jax.Array:
+        """Return pre-readout hidden features (shape ``(hidden_dim,)``)."""
+        ...
+
+    def __call__(self, coord, *, film=None) -> jax.Array:
+        """Forward pass; scalar when ``out_features is None``, vector otherwise."""
+        ...
+
+
+def _validate_body_args(num_hidden_layers, out_features):
+    """Shared constructor preconditions for the body classes.
+
+    Returns ``None`` when ``out_features == 1`` (canonicalisation) so that the
+    two scalar-yielding constructions produce identical pytrees.
+    """
+    assert num_hidden_layers >= 1, f"num_hidden_layers must be >= 1, got {num_hidden_layers}"
+    assert out_features is None or (
+        isinstance(out_features, int) and not isinstance(out_features, bool) and out_features >= 1
+    ), f"out_features must be None or positive int, got {out_features!r}"
+    return None if out_features == 1 else out_features
+
+
+def _build_readout(hidden_dim, omega_hidden, out_features, key):
+    """Sample the readout weights with the same SIREN-style bound used elsewhere."""
+    # Bound applies per-output-component; independent of out_features.
+    bound = jnp.sqrt(6.0 / hidden_dim) / max(omega_hidden, 1e-3)
+    kw, kb = jax.random.split(key)
+    out_dim = 1 if out_features is None else out_features
+    readout_W = jax.random.uniform(kw, (out_dim, hidden_dim), minval=-bound, maxval=bound)
+    readout_b = jax.random.uniform(kb, (out_dim,), minval=-bound, maxval=bound)
+    return readout_W, readout_b
+
+
+class Body(eqx.Module):
+    """Public base class for any basis body.
+
+    Subclass this directly to implement a new basis family with custom
+    activation layers — see ``SIREN`` / ``HSIREN`` / ``WIRE`` for examples
+    of the pattern (build a ``layers`` tuple of your own ``Basis`` subclass
+    in ``__init__``, call ``_validate_body_args`` and ``_build_readout`` to
+    satisfy the ``Body`` invariants, assign the structural fields).
+
+    Symmetric with the ``Basis`` and ``Encoding`` ABCs — downstream consumers
+    (e.g. ``loom`` renderers) can type-annotate against ``Body`` to accept
+    *any* basis body, including user-defined ones, or against
+    ``BasisModule`` for structural-typing flexibility.
+
+    **Don't subclass the concrete bodies externally.** ``SIREN``, ``HSIREN``,
+    ``WIRE`` are specific basis instantiations (sin / sinh-sin / Gabor); a
+    new basis family (Gabor variants, hash-grid, learned Fourier features as
+    activation, etc.) should subclass ``Body`` directly with its own
+    ``Basis`` subclass, not subclass an existing concrete body whose
+    semantics it doesn't share.
+
+    Each body's ``__init__`` is written out explicitly rather than dispatched
+    via a shared helper or class attribute — see the user-memory note
+    "Repetition over confusing indirection" (2026-05-17).
 
     ``out_features`` controls the readout width and the return shape of
     ``__call__``: ``None`` (default) or ``1`` gives a scalar, integer ``N > 1``
@@ -126,64 +245,9 @@ class BasisBody(eqx.Module):
     layers: tuple
     readout_W: Float[Array, "out hidden"]
     readout_b: Float[Array, "out"]
+    out_features: int | None = eqx.field(static=True)
     hidden_dim: int = eqx.field(static=True)
     num_hidden_layers: int = eqx.field(static=True)
-    kind: str = eqx.field(static=True)
-    out_features: int | None = eqx.field(static=True)
-
-    def __init__(
-        self,
-        in_dim,
-        hidden_dim,
-        num_hidden_layers,
-        kind="siren",
-        *,
-        key,
-        omega_first=6.0,
-        omega_hidden=1.0,
-        s_init=3.0,
-        out_features=None,
-    ):
-        """Initialise the body MLP.
-
-        Args:
-            in_dim: Coordinate (input) dimension.
-            hidden_dim: Width of each hidden layer.
-            num_hidden_layers: Number of stacked ``BasisLayer`` s.
-            kind: One of ``BASIS_KINDS``.
-            key: JAX PRNG key.
-            omega_first: Initial frequency for the first (input) layer.
-            omega_hidden: Initial frequency for subsequent layers.
-            s_init: Initial WIRE width scalar (used only when ``kind == "wire"``).
-            out_features: Readout width. ``None`` (default) or ``1`` makes
-                ``__call__`` return a scalar; integer ``N > 1`` makes it
-                return a vector of shape ``(N,)``. ``1`` is canonicalised to
-                ``None`` so the two scalar constructions are indistinguishable.
-        """
-        assert kind in BASIS_KINDS, kind
-        assert num_hidden_layers >= 1, f"num_hidden_layers must be >= 1, got {num_hidden_layers}"
-        assert out_features is None or (
-            isinstance(out_features, int) and not isinstance(out_features, bool) and out_features >= 1
-        ), f"out_features must be None or positive int, got {out_features!r}"
-        if out_features == 1:
-            out_features = None
-        keys = jax.random.split(key, num_hidden_layers + 1)
-        layers = []
-        for i in range(num_hidden_layers):
-            in_d = in_dim if i == 0 else hidden_dim
-            o = omega_first if i == 0 else omega_hidden
-            layers.append(BasisLayer(in_d, hidden_dim, o, kind, is_first=(i == 0), key=keys[i], s_init=s_init))
-        self.layers = tuple(layers)
-        # Bound applies per-output-component; independent of out_features.
-        bound = jnp.sqrt(6.0 / hidden_dim) / max(omega_hidden, 1e-3)
-        kw, kb = jax.random.split(keys[-1])
-        out_dim = 1 if out_features is None else out_features
-        self.readout_W = jax.random.uniform(kw, (out_dim, hidden_dim), minval=-bound, maxval=bound)
-        self.readout_b = jax.random.uniform(kb, (out_dim,), minval=-bound, maxval=bound)
-        self.hidden_dim = hidden_dim
-        self.num_hidden_layers = num_hidden_layers
-        self.kind = kind
-        self.out_features = out_features
 
     def trunk(self, coord, *, film=None):
         """Return pre-readout hidden features.
@@ -231,3 +295,129 @@ class BasisBody(eqx.Module):
             # any leading batch dims (e.g. from vmap with batch size 1) survive.
             return y.squeeze(-1)
         return y
+
+
+class SIREN(Body):
+    """Stack of ``SIRENLayer`` s with an internal linear readout (Sitzmann+ 2020)."""
+
+    def __init__(
+        self,
+        in_dim,
+        hidden_dim,
+        num_hidden_layers,
+        *,
+        key,
+        out_features=None,
+        omega_first=6.0,
+        omega_hidden=1.0,
+    ):
+        """Initialise the SIREN body MLP.
+
+        Args:
+            in_dim: Coordinate (input) dimension.
+            hidden_dim: Width of each hidden layer.
+            num_hidden_layers: Number of stacked ``SIRENLayer`` s.
+            key: JAX PRNG key.
+            out_features: Readout width. ``None`` (default) or ``1`` makes
+                ``__call__`` return a scalar; integer ``N > 1`` makes it
+                return a vector of shape ``(N,)``. ``1`` is canonicalised to
+                ``None`` so the two scalar constructions are indistinguishable.
+            omega_first: Initial frequency for the first (input) layer.
+            omega_hidden: Initial frequency for subsequent layers.
+        """
+        out_features = _validate_body_args(num_hidden_layers, out_features)
+        keys = jax.random.split(key, num_hidden_layers + 1)
+        layers = []
+        for i in range(num_hidden_layers):
+            in_d = in_dim if i == 0 else hidden_dim
+            o = omega_first if i == 0 else omega_hidden
+            layers.append(SIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))
+        self.layers = tuple(layers)
+        self.readout_W, self.readout_b = _build_readout(hidden_dim, omega_hidden, out_features, keys[-1])
+        self.out_features = out_features
+        self.hidden_dim = hidden_dim
+        self.num_hidden_layers = num_hidden_layers
+
+
+class HSIREN(Body):
+    """Stack of ``HSIRENLayer`` s with an internal linear readout (Cai & Pan 2024)."""
+
+    def __init__(
+        self,
+        in_dim,
+        hidden_dim,
+        num_hidden_layers,
+        *,
+        key,
+        out_features=None,
+        omega_first=6.0,
+        omega_hidden=1.0,
+    ):
+        """Initialise the H-SIREN body MLP.
+
+        Args:
+            in_dim: Coordinate (input) dimension.
+            hidden_dim: Width of each hidden layer.
+            num_hidden_layers: Number of stacked ``HSIRENLayer`` s.
+            key: JAX PRNG key.
+            out_features: Readout width; see :class:`SIREN`.
+            omega_first: Initial frequency for the first (input) layer.
+            omega_hidden: Initial frequency for subsequent layers.
+        """
+        out_features = _validate_body_args(num_hidden_layers, out_features)
+        keys = jax.random.split(key, num_hidden_layers + 1)
+        layers = []
+        for i in range(num_hidden_layers):
+            in_d = in_dim if i == 0 else hidden_dim
+            o = omega_first if i == 0 else omega_hidden
+            layers.append(HSIRENLayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i]))
+        self.layers = tuple(layers)
+        self.readout_W, self.readout_b = _build_readout(hidden_dim, omega_hidden, out_features, keys[-1])
+        self.out_features = out_features
+        self.hidden_dim = hidden_dim
+        self.num_hidden_layers = num_hidden_layers
+
+
+class WIRE(Body):
+    """Stack of ``WIRELayer`` s with an internal linear readout (Saragadam+ 2023).
+
+    Accepts ``s_init`` explicitly (forwarded to each ``WIRELayer``) controlling
+    the initial Gaussian window width. SIREN and H-SIREN do not.
+    """
+
+    def __init__(
+        self,
+        in_dim,
+        hidden_dim,
+        num_hidden_layers,
+        *,
+        key,
+        out_features=None,
+        omega_first=6.0,
+        omega_hidden=1.0,
+        s_init=3.0,
+    ):
+        """Initialise the WIRE body MLP.
+
+        Args:
+            in_dim: Coordinate (input) dimension.
+            hidden_dim: Width of each hidden layer.
+            num_hidden_layers: Number of stacked ``WIRELayer`` s.
+            key: JAX PRNG key.
+            out_features: Readout width; see :class:`SIREN`.
+            omega_first: Initial frequency for the first (input) layer.
+            omega_hidden: Initial frequency for subsequent layers.
+            s_init: Initial WIRE Gaussian-window scalar (per layer).
+        """
+        out_features = _validate_body_args(num_hidden_layers, out_features)
+        keys = jax.random.split(key, num_hidden_layers + 1)
+        layers = []
+        for i in range(num_hidden_layers):
+            in_d = in_dim if i == 0 else hidden_dim
+            o = omega_first if i == 0 else omega_hidden
+            layers.append(WIRELayer(in_d, hidden_dim, o, is_first=(i == 0), key=keys[i], s_init=s_init))
+        self.layers = tuple(layers)
+        self.readout_W, self.readout_b = _build_readout(hidden_dim, omega_hidden, out_features, keys[-1])
+        self.out_features = out_features
+        self.hidden_dim = hidden_dim
+        self.num_hidden_layers = num_hidden_layers

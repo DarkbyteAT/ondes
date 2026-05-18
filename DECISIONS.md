@@ -8,8 +8,12 @@ A short, citable record of the design decisions that shape the public surface of
 
 **Library public surface:**
 
-- `SIREN`, `HSIREN`, `WIRE` — basis-MLP trunks (`eqx.Module`, callable).
-- `Encoding` family and factories — `Gaussian`, `Dyadic`, `NO_ENCODING`, `gaussian_fixed`, `gaussian_from_shape`, `gaussian_learn`, `dyadic`.
+- `Basis` — ABC for a single basis-MLP layer; exposes the shared linear + FiLM pre-activation and the abstract `_activate` hook subclasses override.
+- `SIRENLayer`, `HSIRENLayer`, `WIRELayer` — concrete layer subclasses, one per basis family. Only `WIRELayer` carries the basis-specific learnable scalar `s`.
+- `Body` — public base for basis-MLP trunks; exposes `trunk()`, `__call__`, the readout, FiLM dispatch, and `out_features` scalar/vector switch. Symmetric with `Basis` and `Encoding`. Not intended for external subclassing — new variants should subclass `SIREN`/`HSIREN`/`WIRE`, not `Body` directly.
+- `SIREN`, `HSIREN`, `WIRE` — basis-MLP trunks (`eqx.Module`, callable, inherit `Body`). Each constructs the matching layer subclass. `WIRE.__init__` accepts an extra `s_init` kwarg; `SIREN` and `HSIREN` do not.
+- `Encoding` — ABC for coord pre-encodings; exposes an `out_dim` property and `__call__(coord)` abstract method.
+- `Identity`, `Gaussian`, `LearnedGaussian`, `Dyadic` — concrete encoding subclasses. Each is *operational* (materialises its own parameters at construction and acts as a callable `coord → embedded` map). The class itself is the constructor; there are no factory functions. `Gaussian` bakes `sigma` into the sampled `B` matrix at construction; `LearnedGaussian` carries `B_raw` + a learnable scalar `sigma` so optimisers update the spectral scale through gradients.
 - `siren_init`, `nyquist_sigma` — init primitives `ondes` consumes internally.
 - `inr.trunk(coord, **kw)` — public on every basis module; returns pre-readout features.
 - `out_features` constructor kwarg on every basis class; `None` (default) ⇒ scalar return from `__call__`; integer `N > 1` ⇒ `(N,)` vector return. `out_features=1` is canonicalised to `None` at construction so the two scalar-return forms produce identical pytrees — relevant for serialisation, jit caching, and tree-equality checks.
@@ -21,6 +25,10 @@ A short, citable record of the design decisions that shape the public surface of
 - No `head=` constructor kwarg.
 - No `ondes.heads` module — no prebuilt distribution wrappers, no Gram-Schmidt helpers, no `normal_params`, no `softplus_scale`, nothing of the kind.
 - No bundled `distreqx` integration.
+- No `kind: str` discriminators on any public type. Basis kind (SIREN/HSIREN/WIRE) and encoding kind (Identity/Gaussian/LearnedGaussian/Dyadic) are expressed as separate classes; consumers dispatch on `isinstance(...)` or, equivalently, on the type that comes out of the constructor. See §"Structural design — polymorphism over discriminators".
+- No factory functions. The class IS the constructor — `Gaussian(rank=3, num_freqs=128, sigma=2.5, key=k)`, `LearnedGaussian(rank=3, num_freqs=128, key=k)`, `Dyadic(rank=3, num_bands=4)`, `Identity(in_dim=3)`.
+- No `NO_ENCODING` singleton. Users construct `Identity(in_dim=...)` themselves; the in_dim is part of the encoding's interface (it's what `out_dim` reports).
+- No `sigma_from_shape: Callable` field on `Gaussian`. The shape-rule pattern is a downstream concern (a renderer constructs one encoding per leaf with `sigma = nyquist_sigma(leaf.shape)`); ondes does not bake the rule into the encoding itself.
 
 Composition between an `inr` and a head/distribution/parameterisation lives entirely in user code, typically as a small `Model(eqx.Module)` wrapper.
 
@@ -37,6 +45,26 @@ Five independent rationales arrived at the same verdict:
 4. **Cohort norm** (ml-engineer's empirical check). `samgria`, `rltrain`, `xptrack` export zero curated-convenience namespaces. `ondes.heads` would be the first such namespace in the cohort and would set the opposite gravity from the one explicitly chosen elsewhere.
 
 5. **Reversibility asymmetry** (advocate's concession). Adding `head=` and `ondes.heads.X` later is a trivial additive change. Removing them later is a breaking change. Start at the smaller surface; grow only against demonstrated need.
+
+## Structural design — polymorphism over discriminators
+
+**No `kind: str` dispatch.** Activation choice (SIREN/HSIREN/WIRE), encoding choice (Identity/Gaussian/LearnedGaussian/Dyadic), and any future variant family is expressed via concrete subclasses inheriting a thin ABC. Each subclass carries only its own fields (e.g. `WIRELayer` has `s`; `SIRENLayer` doesn't; `LearnedGaussian` has a trainable `sigma`; `Gaussian` doesn't). String discriminators are forbidden in this codebase by convention — they make invalid states constructible, force XLA to compile dead branches, and propagate the anti-pattern into every downstream consumer that touches the type.
+
+**The same prohibition applies at field granularity.** Type-discriminator dispatch via `callable(x)`, `isinstance(x, T)`, or any runtime check on a union field's inferred shape is the same anti-pattern as string discriminators and is also forbidden. The principle: a field is `T` (one type), not `T₁ | T₂` where the consumer dispatches on which arrived. If two semantics need different consumer behaviour, they need different classes. This applies across the library, regardless of whether the discriminator is at class granularity (`kind: str` → SIREN/HSIREN/WIRE) or field granularity (`sigma: float | Callable` → Gaussian/GaussianFromShape). The two cases share the same diagnostic — at the dispatch site the consumer is asking "which variant did I get?" — and the same fix: hoist the discrimination into the type system.
+
+Three reasons spelled out:
+
+1. **Pytree hygiene.** With a single shared class, every layer/encoding carries every variant's fields. A `BasisLayer(kind="siren")` would still pytree-leaf an unused `s` for WIRE's Gaussian-window scalar; JAX optimisers see those unused leaves, allocate optimiser state for them, and (silently) propagate gradients through them. The split puts `s` only on `WIRELayer` — non-WIRE pytrees genuinely don't contain it. Same logic kills the `sigma | sigma_from_shape | learn_sigma` triple-nullable on `Encoding`: each encoding now carries only the parameters its forward pass uses.
+
+2. **Type-system support.** With a discriminator, callers can write `body.kind == "siren"` but the type checker has no opinion. With separate classes, `isinstance(body, SIREN)` (or pattern matching on type) gets static-analysis support, and downstream code (e.g. a renderer in `loom`) can use overload resolution rather than `if/elif` chains on string fields.
+
+3. **Propagation cost.** The discriminator pattern looks cheap in one library and stays cheap in two; by the third consumer the `kind in {…}` checks have replicated into every downstream module that wants to dispatch on basis identity. Killing it before it propagates to `loom` (the immediate next downstream) is cheaper than killing it after.
+
+The same logic applies to encoding factories: `gaussian_fixed(2.5)` and `gaussian_from_shape(rule)` and `gaussian_learn()` were three indirections over near-identical record constructions. The class IS the constructor — `Gaussian(rank=..., num_freqs=..., sigma=..., key=...)`, `LearnedGaussian(rank=..., num_freqs=..., key=...)`, `Dyadic(rank=..., num_bands=...)`, `Identity(in_dim=...)`. The `sigma_from_shape: Callable` field is gone too — that was a shape-rule mechanism for per-leaf encoding construction, which is the *renderer's* responsibility (loom calls `Gaussian(sigma=nyquist_sigma(leaf.shape), ...)` per leaf), not the encoding's.
+
+This is a permanent policy. Future contributors hit it at PR review: any new variant family is a new subclass, never a new `kind` value.
+
+**Downstream consumers type against `Body` or `BasisModule`, never the concrete union.** Two valid choices: `Body` for nominal typing (the concrete public base; what every shipped basis body inherits) or `BasisModule` for structural typing (the `Protocol`; matches any duck-typed body including user-defined wrappers). Both are public and documented. What's forbidden is `SIREN | HSIREN | WIRE` (the anti-pattern relapse this section closes — the union grows every time a new basis lands, every downstream consumer pays the cost). `BasisModule` is `@runtime_checkable`, so `isinstance(body, BasisModule)` works at runtime when static typing isn't enough.
 
 ## The three-AND-gate (for any future addition)
 
