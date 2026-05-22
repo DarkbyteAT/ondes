@@ -175,3 +175,23 @@ def test_all_layers_stack_cleanly_when_in_dim_equals_hidden_dim():
     assert stacked.W.shape == (4, 4, 4)
     assert stacked.b.shape == (4, 4)
     assert stacked.omega.shape == (4,)
+
+
+@pytest.mark.parametrize("body_cls", [SIREN, HSIREN, WIRE])
+def test_layer_pytree_structure_is_homogeneous_across_body(body_cls):
+    # Given: a body of each basis class in the realistic in_dim != hidden_dim shape
+    # When: comparing the pytree structure of every layer against layer 0
+    # Then: all layers share identical structure. This is the load-bearing
+    # invariant the #8 refactor restored — `is_first` was the last static
+    # field that discriminated layer 0 from the rest at the pytree level.
+    # The assertion holds even when shapes differ (W of layer 0 is
+    # (hidden, in_dim), W of the rest is (hidden, hidden)): tree_structure
+    # compares pytree *shape* (leaf positions and static-field values), not
+    # array shapes. Array-shape uniformity is a separate concern, exercised
+    # by the stack/scan tests above.
+    body = body_cls(in_dim=2, hidden_dim=64, num_hidden_layers=6, key=jax.random.key(5))
+    ref_structure = jax.tree_util.tree_structure(body.layers[0])
+    for i, layer in enumerate(body.layers):
+        assert jax.tree_util.tree_structure(layer) == ref_structure, (
+            f"layer {i} has different pytree structure than layer 0"
+        )
