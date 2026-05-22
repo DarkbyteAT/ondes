@@ -1,15 +1,16 @@
 """Scannability tests for SIREN/HSIREN/WIRE bodies.
 
-The polymorphism refactor produces uniform per-class layer pytree structure:
-within one body, all layers are the same concrete class and have the same
-array-leaf shapes. This *enables* ``jax.lax.scan`` over the layer stack — but
-with one caveat: the first layer has ``is_first=True`` (a static bool field)
-while subsequent layers have ``is_first=False``, so a naive
-``jax.tree.map(stack, *body.layers)`` fails on the static-field mismatch.
+Within one body, all layers are the same concrete class and (since #8
+dropped the ``is_first`` field) share an identical pytree structure. The
+remaining blocker for "stack all N layers" is purely a *shape* mismatch:
+layer 0's ``W`` has shape ``(hidden_dim, in_dim)`` while layers 1..N-1
+have ``(hidden_dim, hidden_dim)``. When ``in_dim == hidden_dim`` the
+stack succeeds and scan-over-all-N-layers runs uniformly; in the
+realistic case (``in_dim`` is 2 or 3 for coord inputs, ``hidden_dim`` is
+64+), the layer-0-separate pattern is still required.
 
-The realistic scan pattern: apply layer 0 separately, then scan layers
-1..N-1. These tests demonstrate that pattern and assert numerical match
-with the eager (for-loop) forward pass.
+These tests demonstrate the scan pattern and assert numerical match with
+the eager (for-loop) forward pass.
 """
 
 import equinox as eqx
@@ -33,9 +34,11 @@ def _stack_arrays(layers):
 def _scan_trunk(body, coord, *, film=None):
     """Reimplement Body.trunk via jax.lax.scan over layers 1..N-1.
 
-    Layer 0 is applied eagerly because its ``is_first=True`` static field
-    differs from the rest. The remaining N-1 layers all have ``is_first=False``
-    and stack cleanly.
+    Layer 0 is applied eagerly because its ``W`` has shape
+    ``(hidden_dim, in_dim)`` while layers 1..N-1 have
+    ``(hidden_dim, hidden_dim)``; that shape mismatch (not any pytree
+    structural difference — see #8) is the remaining blocker for stacking
+    the whole layer stack uniformly.
     """
     # Layer 0: handled separately (different static field, different in_dim).
     if film is not None:
@@ -82,7 +85,9 @@ def test_scan_matches_eager_for_loop(body_cls, layer_cls):
     # Given: a body of each basis class with multiple hidden layers
     # When: comparing the eager trunk() against the scan-rebuilt trunk
     # Then: outputs match to float32 precision. Demonstrates that scan is
-    # mechanically viable over layers 1..N-1 once you partition by is_first.
+    # mechanically viable over layers 1..N-1 once layer 0 is applied
+    # separately to absorb its (hidden, in_dim) → (hidden, hidden) shape
+    # transition.
     body = body_cls(in_dim=2, hidden_dim=64, num_hidden_layers=6, key=jax.random.key(0))
     coord = jnp.array([0.1, -0.2])
 
@@ -115,29 +120,78 @@ def test_scan_matches_eager_with_film_modulation():
     assert jnp.allclose(eager, scanned, atol=1e-4)
 
 
-def test_naive_stack_all_layers_fails_on_is_first_mismatch():
-    # Given: a SIREN body where layer 0 has is_first=True and the rest have is_first=False
-    # When: attempting to stack ALL layers via jax.tree.map
-    # Then: it raises — the static `is_first` field discriminates layer 0 from
-    # the rest at the pytree level. Documents WHY the realistic scan pattern
-    # has to apply layer 0 separately rather than scanning over all N layers
-    # uniformly. (If a future refactor unified the init bound, this test would
-    # need updating.)
-    body = SIREN(in_dim=4, hidden_dim=4, num_hidden_layers=4, key=jax.random.key(2))
-    with pytest.raises(ValueError, match="Mismatch"):
+def test_scan_all_n_layers_matches_eager_when_in_dim_equals_hidden_dim():
+    # Given: a SIREN body with in_dim == hidden_dim so all N layers stack
+    # When: scanning the full layer stack in one go (no layer-0 special case)
+    # Then: output matches the eager trunk. Post-#8 the pytree structure is
+    # uniform across all layers, so this is the genuinely-clean case the
+    # is_first removal enables: layer 0 and layers 1..N-1 are mechanically
+    # identical, the only constraint was shape, and equal in_dim removes
+    # even that.
+    body = SIREN(in_dim=4, hidden_dim=4, num_hidden_layers=5, key=jax.random.key(4))
+    coord = jnp.array([0.1, -0.2, 0.3, -0.4])
+
+    eager = body.trunk(coord)
+
+    # Stack ALL N layers, scan from raw coord.
+    params, static = eqx.partition(body.layers[0], eqx.is_array)
+    stacked = _stack_arrays([eqx.filter(layer, eqx.is_array) for layer in body.layers])
+
+    def step(h, layer_arrays):
+        layer = eqx.combine(layer_arrays, static)
+        return layer(h), None
+
+    scanned, _ = jax.lax.scan(step, coord, stacked)
+
+    assert eager.shape == scanned.shape == (4,)
+    assert jnp.allclose(eager, scanned, atol=1e-4)
+
+
+def test_naive_stack_all_layers_fails_on_shape_mismatch_when_in_dim_differs():
+    # Given: a realistic SIREN body where in_dim != hidden_dim (coord inputs)
+    # When: attempting to stack ALL N layers via jax.tree.map
+    # Then: it raises a *shape* error — layer 0's W is (hidden, in_dim) while
+    # layers 1..N-1 have (hidden, hidden). Post-#8 the pytree structures are
+    # uniform (is_first is no longer a field), so the static-discriminator
+    # issue is gone; what remains is a genuine shape-level constraint.
+    # Documents why the layer-0-separate scan pattern persists for the
+    # common in_dim != hidden_dim case.
+    body = SIREN(in_dim=2, hidden_dim=64, num_hidden_layers=4, key=jax.random.key(2))
+    with pytest.raises(ValueError, match="same shape"):
         _stack_arrays(list(body.layers))
 
 
-def test_homogeneous_layers_stack_cleanly():
-    # Given: a list of layers all constructed with is_first=False
-    # When: stacking via jax.tree.map
-    # Then: stacking succeeds — confirms the ONLY blocker for naive
-    # stack-everything is is_first, not anything intrinsic to the polymorphism
-    # design. Within "all hidden layers" the design is genuinely scan-friendly.
-    keys = jax.random.split(jax.random.key(3), 4)
-    layers = [SIRENLayer(4, 4, omega_init=1.0, is_first=False, key=keys[i]) for i in range(4)]
-    stacked = _stack_arrays(layers)
-    # Each array leaf gains a leading axis of size 4.
+def test_all_layers_stack_cleanly_when_in_dim_equals_hidden_dim():
+    # Given: a SIREN body where in_dim == hidden_dim (artificial; not the typical
+    # INR shape, but exercises the "all layers genuinely uniform" code path)
+    # When: stacking ALL N layers via jax.tree.map
+    # Then: the stack succeeds. Post-#8 the pytree structure is uniform across
+    # layers; the only residual constraint is shape, and equal in_dim removes
+    # that too. Documents that scan-over-the-full-stack is mechanically clean
+    # whenever shapes align — no static-field discriminator left to block it.
+    body = SIREN(in_dim=4, hidden_dim=4, num_hidden_layers=4, key=jax.random.key(3))
+    stacked = _stack_arrays(list(body.layers))
+    # Every array leaf gains a leading axis of size num_hidden_layers.
     assert stacked.W.shape == (4, 4, 4)
     assert stacked.b.shape == (4, 4)
     assert stacked.omega.shape == (4,)
+
+
+@pytest.mark.parametrize("body_cls", [SIREN, HSIREN, WIRE])
+def test_layer_pytree_structure_is_homogeneous_across_body(body_cls):
+    # Given: a body of each basis class in the realistic in_dim != hidden_dim shape
+    # When: comparing the pytree structure of every layer against layer 0
+    # Then: all layers share identical structure. This is the load-bearing
+    # invariant the #8 refactor restored — `is_first` was the last static
+    # field that discriminated layer 0 from the rest at the pytree level.
+    # The assertion holds even when shapes differ (W of layer 0 is
+    # (hidden, in_dim), W of the rest is (hidden, hidden)): tree_structure
+    # compares pytree *shape* (leaf positions and static-field values), not
+    # array shapes. Array-shape uniformity is a separate concern, exercised
+    # by the stack/scan tests above.
+    body = body_cls(in_dim=2, hidden_dim=64, num_hidden_layers=6, key=jax.random.key(5))
+    ref_structure = jax.tree_util.tree_structure(body.layers[0])
+    for i, layer in enumerate(body.layers):
+        assert jax.tree_util.tree_structure(layer) == ref_structure, (
+            f"layer {i} has different pytree structure than layer 0"
+        )

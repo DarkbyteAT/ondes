@@ -71,13 +71,20 @@ class Basis(eqx.Module):
     W: Float[Array, "out in"]
     b: Float[Array, "out"]
     omega: Float[Array, ""]
-    is_first: bool = eqx.field(static=True)
 
     def __init__(self, in_dim, out_dim, omega_init, is_first, *, key):
-        """Initialise the linear weights and the learnable ``omega``."""
+        """Initialise the linear weights and the learnable ``omega``.
+
+        ``is_first`` is a construction-only kwarg consumed by :func:`siren_init`
+        to pick the init bound (``1/in_dim`` for the first layer,
+        ``sqrt(6/in_dim)/omega`` for the rest). It is *not* stored on the
+        layer because the bound has already been baked into ``W``/``b`` —
+        the forward pass never needs it. Omitting the field keeps every
+        layer in a body pytree-structurally identical, which is the
+        precondition for ``jax.lax.scan`` over the full layer stack.
+        """
         self.W, self.b = siren_init(in_dim, out_dim, omega_init, is_first, key)
         self.omega = jnp.array(float(omega_init))
-        self.is_first = is_first
 
     def _pre(self, x, gamma=None, beta=None):
         """Apply the linear map and optional FiLM modulation."""
