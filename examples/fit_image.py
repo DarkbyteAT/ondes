@@ -11,6 +11,7 @@ Or fit a real image:
     uv run python examples/fit_image.py --image cat.png --steps 2000 --grid 64
 """
 
+from enum import StrEnum
 from pathlib import Path
 
 import equinox as eqx
@@ -30,7 +31,34 @@ app = typer.Typer(add_completion=False)
 # Adam(1e-3) — Sitzmann+ 2020 uses 5e-5 for natural images; 1e-3 works for the
 # small synthetic targets in this demo (256-1024 pixels, 200-500 steps).
 # Switch to 5e-5 + ~5k steps when fitting megapixel natural images.
-_BASIS_CLASSES = {"siren": ondes.SIREN, "hsiren": ondes.HSIREN, "wire": ondes.WIRE}
+
+
+class BasisChoice(StrEnum):
+    """Typer-friendly basis-kind choice.
+
+    StrEnum so CLI input is validated automatically and `--basis foo` prints
+    a clean error instead of raising KeyError. Compares equal to plain strings
+    (tests pass `basis="siren"`); enum members are str instances.
+    """
+
+    SIREN = "siren"
+    HSIREN = "hsiren"
+    WIRE = "wire"
+
+
+class SyntheticChoice(StrEnum):
+    """Typer-friendly choice of named synthetic target."""
+
+    SINUSOID = "sinusoid"
+    GAUSSIAN_BUMP = "gaussian_bump"
+    MANDELBROT = "mandelbrot"
+
+
+_BASIS_CLASSES = {
+    BasisChoice.SIREN: ondes.SIREN,
+    BasisChoice.HSIREN: ondes.HSIREN,
+    BasisChoice.WIRE: ondes.WIRE,
+}
 
 
 class Model(eqx.Module):
@@ -49,7 +77,7 @@ class Model(eqx.Module):
         return self.inr(coord)
 
 
-def build_model(basis: str, in_dim: int, hidden: int, layers: int, omega: float, *, key):
+def build_model(basis: BasisChoice, in_dim: int, hidden: int, layers: int, omega: float, *, key):
     """Construct one of {SIREN, HSIREN, WIRE} from the CLI's `--basis` flag.
 
     The string-to-class lookup is the *user-side* dispatch DECISIONS.md
@@ -87,15 +115,19 @@ def make_coords(*axes_sizes: int):
     return jnp.stack([m.ravel() for m in mesh], axis=-1)
 
 
-def synthetic_target(name: str, grid_n: int):
-    """Return `(coords, values)` for a named synthetic 2D target."""
+def synthetic_target(name: SyntheticChoice, grid_n: int):
+    """Return `(coords, values)` for a named synthetic 2D target.
+
+    Accepts the SyntheticChoice enum (via the CLI) or a bare string (via tests).
+    Both forms compare equal because SyntheticChoice is `(str, Enum)`.
+    """
     coords = make_coords(grid_n, grid_n)
     x, y = coords[:, 0], coords[:, 1]
-    if name == "sinusoid":
+    if name == SyntheticChoice.SINUSOID:
         values = jnp.sin(2.0 * jnp.pi * 3.0 * x) * jnp.cos(2.0 * jnp.pi * 3.0 * y)
-    elif name == "gaussian_bump":
+    elif name == SyntheticChoice.GAUSSIAN_BUMP:
         values = jnp.exp(-5.0 * (x**2 + y**2))
-    elif name == "mandelbrot":
+    elif name == SyntheticChoice.MANDELBROT:
         # Escape-time count, normalised; harder than sinusoid (sharp boundary).
         c = x + 1j * y
         z = jnp.zeros_like(c)
@@ -126,7 +158,17 @@ def load_image(path: Path, grid_n: int):
             pil_img = pil_img.convert("RGB")
         else:
             pil_img = pil_img.convert("L")
-        img = np.asarray(pil_img.resize((grid_n, grid_n)), dtype=np.float32) / 255.0
+        # BILINEAR resampling — the PIL default (NEAREST) introduces aliasing
+        # when downsampling natural images to small grids, which makes the
+        # coord-to-value mapping unnecessarily noisy and harder for the INR
+        # to fit. BILINEAR is the standard low-pass choice.
+        img = (
+            np.asarray(
+                pil_img.resize((grid_n, grid_n), Image.Resampling.BILINEAR),
+                dtype=np.float32,
+            )
+            / 255.0
+        )
     if img.ndim == 2:
         coords = make_coords(grid_n, grid_n)
         return coords, jnp.asarray(img.ravel())
@@ -189,9 +231,16 @@ def reconstruct(model, grid_n: int, in_dim: int):
 
 @app.command()
 def main(
-    image: Path | None = typer.Option(None, help="Path to image; if omitted, use --synthetic."),
-    synthetic: str = typer.Option("sinusoid", help="One of: sinusoid, mandelbrot, gaussian_bump."),
-    basis: str = typer.Option("siren", help="One of: siren, hsiren, wire."),
+    image: Path | None = typer.Option(
+        None,
+        help="Path to image; if omitted, use --synthetic.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    synthetic: SyntheticChoice = typer.Option(SyntheticChoice.SINUSOID, help="Named synthetic target."),
+    basis: BasisChoice = typer.Option(BasisChoice.SIREN, help="Basis kind."),
     hidden: int = typer.Option(64, help="Hidden dim."),
     layers: int = typer.Option(3, help="Number of hidden layers."),
     omega: float = typer.Option(30.0, help="ω init for both first and hidden layers."),
@@ -235,6 +284,10 @@ def main(
         else:
             arr = recon
         arr = np.clip(arr, 0.0, 1.0)
+        # Ensure parent dir exists — typer doesn't validate output paths the
+        # same way --image does, so a user running with --output recons/foo.png
+        # in a fresh repo would otherwise hit FileNotFoundError from PIL.
+        output.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray((arr * 255).astype(np.uint8)).save(output)
         typer.echo(f"saved reconstruction to {output}")
 
