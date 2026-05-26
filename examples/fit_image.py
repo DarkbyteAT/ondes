@@ -198,17 +198,32 @@ def train(model, coords, target, *, steps: int, lr: float):
     opt_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
     jitted_loss = eqx.filter_jit(loss_fn)
 
-    def step(carry, _):
-        model, opt_state = carry
-        loss, grads = eqx.filter_value_and_grad(loss_fn)(model, coords, target)
-        updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
-        model = eqx.apply_updates(model, updates)
-        return (model, opt_state), loss
+    # Take model, opt_state, coords, target as explicit args so JAX caches the
+    # compiled scan across calls with different array values — closure-capture
+    # of these arrays would mark them as static constants and force recompile
+    # per call, which is fine for one-off scripts but a footgun for users
+    # copy-pasting this loop into their own training code.
+    @eqx.filter_jit
+    def run_scan(model, opt_state, coords, target):
+        def step(carry, _):
+            m, o = carry
+            loss, grads = eqx.filter_value_and_grad(loss_fn)(m, coords, target)
+            updates, o = optimiser.update(grads, o, eqx.filter(m, eqx.is_inexact_array))
+            m = eqx.apply_updates(m, updates)
+            return (m, o), loss
+
+        return jax.lax.scan(step, (model, opt_state), None, length=steps)
 
     initial_loss = float(jitted_loss(model, coords, target))
-    (model, _), _ = eqx.filter_jit(lambda m, o: jax.lax.scan(step, (m, o), None, length=steps))(model, opt_state)
+    (model, _), _ = run_scan(model, opt_state, coords, target)
     final_loss = float(jitted_loss(model, coords, target))
     return model, initial_loss, final_loss
+
+
+@eqx.filter_jit
+def _vmap_model(model, coords):
+    """Pure JIT'd vmap so cache hits across calls with different model/coords."""
+    return jax.vmap(model)(coords)
 
 
 def reconstruct(model, grid_n: int, in_dim: int):
@@ -220,12 +235,10 @@ def reconstruct(model, grid_n: int, in_dim: int):
     """
     if in_dim == 2:
         coords = make_coords(grid_n, grid_n)
-        flat = eqx.filter_jit(jax.vmap(model))(coords)
-        return np.asarray(flat).reshape(grid_n, grid_n)
+        return np.asarray(_vmap_model(model, coords)).reshape(grid_n, grid_n)
     if in_dim == 3:
         coords = make_coords(grid_n, grid_n, 3)
-        flat = eqx.filter_jit(jax.vmap(model))(coords)
-        return np.asarray(flat).reshape(grid_n, grid_n, 3)
+        return np.asarray(_vmap_model(model, coords)).reshape(grid_n, grid_n, 3)
     raise ValueError(f"unsupported in_dim for reconstruction: {in_dim}")
 
 
