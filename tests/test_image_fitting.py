@@ -29,7 +29,7 @@ def test_siren_fits_small_sinusoidal_image():
     coords = jnp.stack([xs.ravel(), ys.ravel()], axis=-1)  # (256, 2)
     target = (jnp.sin(2.0 * jnp.pi * 3.0 * xs) * jnp.cos(2.0 * jnp.pi * 3.0 * ys)).ravel()
 
-    key = jax.random.PRNGKey(0)
+    key = jax.random.key(0)
     siren = ondes.SIREN(
         in_dim=2,
         hidden_dim=32,
@@ -44,12 +44,12 @@ def test_siren_fits_small_sinusoidal_image():
         return jnp.mean((pred - target) ** 2)
 
     optimiser = optax.adam(1e-3)
-    opt_state = optimiser.init(eqx.filter(siren, eqx.is_array))
+    opt_state = optimiser.init(eqx.filter(siren, eqx.is_inexact_array))
 
     @eqx.filter_jit
     def step(model, opt_state, coords, target):
         loss, grads = eqx.filter_value_and_grad(loss_fn)(model, coords, target)
-        updates, opt_state = optimiser.update(grads, opt_state, model)
+        updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
         model = eqx.apply_updates(model, updates)
         return model, opt_state, loss
 
