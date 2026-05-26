@@ -218,7 +218,18 @@ def main(
         # reshape needed. The earlier `recon.reshape(grid, grid, grid)` was an
         # artefact of make_coords producing a grid_n^3 cube for RGB.
         recon = reconstruct(model, grid, in_dim)
-        arr = np.clip((recon + 1.0) * 0.5 if recon.min() < 0 else recon, 0.0, 1.0)
+        # Rescale by the *target's* known range, not the prediction's. A
+        # non-negative target (image, mandelbrot, gaussian_bump) can produce
+        # tiny negative overshoots in `recon` from approximation noise; rescaling
+        # on `recon.min() < 0` would dim those outputs spuriously. The target
+        # range is the ground truth.
+        t_min = float(np.asarray(target).min())
+        t_max = float(np.asarray(target).max())
+        if t_max > t_min:
+            arr = (recon - t_min) / (t_max - t_min)
+        else:
+            arr = recon
+        arr = np.clip(arr, 0.0, 1.0)
         Image.fromarray((arr * 255).astype(np.uint8)).save(output)
         typer.echo(f"saved reconstruction to {output}")
 
