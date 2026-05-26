@@ -121,12 +121,12 @@ def load_image(path: Path, grid_n: int):
     palette indices or 4-channel arrays that don't match the value-function
     contract.
     """
-    pil_img = Image.open(path)
-    if pil_img.mode in ("RGBA", "CMYK", "P", "RGB"):
-        pil_img = pil_img.convert("RGB")
-    else:
-        pil_img = pil_img.convert("L")
-    img = np.asarray(pil_img.resize((grid_n, grid_n)), dtype=np.float32) / 255.0
+    with Image.open(path) as pil_img:
+        if pil_img.mode in ("RGBA", "CMYK", "P", "RGB"):
+            pil_img = pil_img.convert("RGB")
+        else:
+            pil_img = pil_img.convert("L")
+        img = np.asarray(pil_img.resize((grid_n, grid_n)), dtype=np.float32) / 255.0
     if img.ndim == 2:
         coords = make_coords(grid_n, grid_n)
         return coords, jnp.asarray(img.ravel())
@@ -145,21 +145,26 @@ def loss_fn(model, coords, target):
 
 
 def train(model, coords, target, *, steps: int, lr: float):
-    """Adam + filter_jit step loop. Returns (trained_model, initial_loss, final_loss)."""
+    """Adam + scan training loop. Returns (trained_model, initial_loss, final_loss).
+
+    The whole loop runs as a single `jax.lax.scan` so XLA compiles all `steps`
+    iterations into one executable — no Python loop overhead, no per-step
+    dispatch latency. The trade-off is that `steps` becomes a JIT-time constant;
+    re-running with a different `steps` triggers a recompile.
+    """
     optimiser = optax.adam(lr)
     opt_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
     jitted_loss = eqx.filter_jit(loss_fn)
 
-    @eqx.filter_jit
-    def step(model, opt_state, coords, target):
+    def step(carry, _):
+        model, opt_state = carry
         loss, grads = eqx.filter_value_and_grad(loss_fn)(model, coords, target)
         updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
         model = eqx.apply_updates(model, updates)
-        return model, opt_state, loss
+        return (model, opt_state), loss
 
     initial_loss = float(jitted_loss(model, coords, target))
-    for _ in range(steps):
-        model, opt_state, _ = step(model, opt_state, coords, target)
+    (model, _), _ = eqx.filter_jit(lambda m, o: jax.lax.scan(step, (m, o), None, length=steps))(model, opt_state)
     final_loss = float(jitted_loss(model, coords, target))
     return model, initial_loss, final_loss
 
