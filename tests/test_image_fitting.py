@@ -1,68 +1,38 @@
-"""Smoke test: a SIREN fits a small synthetic image.
+"""Smoke tests: the `examples/fit_image.py` CLI fits its synthetic targets.
 
-This is the canonical INR use case ondes was designed for. The test constructs
-a small SIREN body, fits a 16x16 sinusoidal target via Adam on MSE, and
-asserts the final loss is substantially lower than the initial loss. The
-threshold is loose (3x reduction) — a smoke check that training is wired up
-end-to-end, not a convergence claim.
+These tests share `build_model` and `train` with the CLI — the script and the
+tests both go through the same construction + training path, so a CI regression
+in either catches the other. We skip the `--image` code path (file I/O); the
+synthetic targets exercise mixed frequencies, smooth bumps, and sharp escape
+boundaries, which is what SIREN-class INRs claim to dominate.
 
-Optax is a *dev* dependency only — ondes itself has no training-stack deps
-(per DECISIONS.md; the library owns coord-to-value primitives, downstream
-owns optimisers). Test code can use anything; library code cannot.
+Optax/typer/pillow are dev-only deps (per DECISIONS.md: ondes library code
+has no training-stack or CLI deps; examples + tests may use anything).
 """
 
-import equinox as eqx
 import jax
-import jax.numpy as jnp
-import optax
+import pytest
 
-import ondes
+from examples.fit_image import build_model, synthetic_target, train
 
 
-def test_siren_fits_small_sinusoidal_image():
-    # Given: a 16x16 grid sampled from sin(2*pi*3*x) * cos(2*pi*3*y) on [-1, 1]^2,
-    # a small SIREN with image-fitting defaults (omega=30 per Sitzmann 2020),
-    # and Adam at lr=1e-3.
-    grid_n = 16
-    coords_1d = jnp.linspace(-1.0, 1.0, grid_n)
-    xs, ys = jnp.meshgrid(coords_1d, coords_1d, indexing="ij")
-    coords = jnp.stack([xs.ravel(), ys.ravel()], axis=-1)  # (256, 2)
-    target = (jnp.sin(2.0 * jnp.pi * 3.0 * xs) * jnp.cos(2.0 * jnp.pi * 3.0 * ys)).ravel()
-
+@pytest.mark.parametrize("target_name", ["sinusoid", "gaussian_bump", "mandelbrot"])
+def test_siren_fits_synthetic_target(target_name):
+    # Given: one of the three synthetic targets the CLI supports, evaluated on
+    # a small 16x16 grid; a SIREN with the same defaults as the CLI uses
+    # (--basis siren --hidden 64 --layers 3 --omega 30); Adam at lr=1e-3 for
+    # 200 steps (the CLI default is 500 — fewer here to keep CI fast).
+    coords, target = synthetic_target(target_name, grid_n=16)
     key = jax.random.key(0)
-    siren = ondes.SIREN(
-        in_dim=2,
-        hidden_dim=32,
-        num_hidden_layers=2,
-        key=key,
-        omega_first=30.0,
-        omega_hidden=30.0,
-    )
+    model = build_model(basis="siren", in_dim=2, hidden=64, layers=3, omega=30.0, key=key)
 
-    def loss_fn(model, coords, target):
-        pred = jax.vmap(model)(coords)
-        return jnp.mean((pred - target) ** 2)
+    # When: we train via the same `train(...)` helper the CLI invokes.
+    _, initial_loss, final_loss = train(model, coords, target, steps=200, lr=1e-3)
 
-    optimiser = optax.adam(1e-3)
-    opt_state = optimiser.init(eqx.filter(siren, eqx.is_inexact_array))
-
-    @eqx.filter_jit
-    def step(model, opt_state, coords, target):
-        loss, grads = eqx.filter_value_and_grad(loss_fn)(model, coords, target)
-        updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
-        model = eqx.apply_updates(model, updates)
-        return model, opt_state, loss
-
-    # When: we measure initial loss and train for 200 Adam steps.
-    initial_loss = float(loss_fn(siren, coords, target))
-    for _ in range(200):
-        siren, opt_state, _ = step(siren, opt_state, coords, target)
-    final_loss = float(loss_fn(siren, coords, target))
-
-    # Then: final loss is at most 30% of initial — substantial learning,
-    # not a convergence claim. A genuine wiring break would leave the ratio at ~1.
+    # Then: final loss is at most 30% of initial. Loose smoke threshold —
+    # catches "training is wired wrong" without claiming convergence.
     assert final_loss < 0.3 * initial_loss, (
-        f"image fit smoke test: expected final_loss < 0.3 * initial_loss, "
-        f"got initial={initial_loss:.4f}, final={final_loss:.4f}, "
+        f"{target_name}: expected final_loss < 0.3 * initial_loss, "
+        f"got initial={initial_loss:.6f}, final={final_loss:.6f}, "
         f"ratio={final_loss / initial_loss:.3f}"
     )
