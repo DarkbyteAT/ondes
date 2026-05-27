@@ -50,7 +50,7 @@ structure and initialisation.
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, Key
 
 from ondes.basis._base import Body, _validate_body_args
 from ondes.basis.mfn import FourierFilter, _mfn_recurrence_init
@@ -83,20 +83,20 @@ class PNF(Body):
             its bias output — the paper's mix layer is bias-free).
     """
 
-    filters: tuple
+    filters: tuple[FourierFilter, ...]
     mix_W: Float[Array, "n_layers hidden hidden"]
 
     def __init__(
         self,
-        in_dim,
-        hidden_dim,
-        num_hidden_layers,
+        in_dim: int,
+        hidden_dim: int,
+        num_hidden_layers: int,
         *,
-        key,
-        out_features=None,
-        input_scale=256.0,
-        weight_scale=1.0,
-    ):
+        key: Key[Array, ""],
+        out_features: int | None = None,
+        input_scale: float = 256.0,
+        weight_scale: float = 1.0,
+    ) -> None:
         """Initialise N+1 Fourier filters and the (mix, readout) stack."""
         out_features = _validate_body_args(num_hidden_layers, out_features)
         n_filters = num_hidden_layers + 1
@@ -127,7 +127,12 @@ class PNF(Body):
         self.hidden_dim = hidden_dim
         self.num_hidden_layers = num_hidden_layers
 
-    def trunk(self, coord, *, film=None):
+    def trunk(
+        self,
+        coord: Float[Array, "in"],
+        *,
+        film: Float[Array, "n_layers two_hidden"] | None = None,
+    ) -> Float[Array, "hidden"]:
         """PNF mix-then-multiply recurrence (paper Eq. 5).
 
         ``film`` gates the post-mix state ``M_i z_i`` before the next

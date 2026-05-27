@@ -26,6 +26,7 @@ Two FINER-specific knobs beyond SIREN's:
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jaxtyping import Array, Float, Key
 
 from ondes.basis._base import Basis, Body, _validate_body_args
 from ondes.basis.siren import _build_readout, siren_init
@@ -47,7 +48,17 @@ class FINERLayer(Basis):
 
     scale_req_grad: bool = eqx.field(static=True)
 
-    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key, first_bias_scale=5.0, scale_req_grad=False):
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        omega_init: float,
+        is_first: bool,
+        *,
+        key: Key[Array, ""],
+        first_bias_scale: float = 5.0,
+        scale_req_grad: bool = False,
+    ) -> None:
         """Initialise SIREN-style weights, then optionally widen the first-layer bias.
 
         ``first_bias_scale`` is only consumed when ``is_first`` is True; it has
@@ -74,7 +85,8 @@ class FINERLayer(Basis):
         self.omega = jnp.array(float(omega_init))
         self.scale_req_grad = bool(scale_req_grad)
 
-    def _activate(self, pre):
+    def _activate(self, pre: Float[Array, "out"]) -> Float[Array, "out"]:
+        """Apply ``sin(omega * (|pre| + 1) * pre)`` with optional stop-gradient on the scale."""
         scale = jnp.abs(pre) + 1.0
         if not self.scale_req_grad:
             scale = jax.lax.stop_gradient(scale)
@@ -105,17 +117,17 @@ class FINER(Body):
 
     def __init__(
         self,
-        in_dim,
-        hidden_dim,
-        num_hidden_layers,
+        in_dim: int,
+        hidden_dim: int,
+        num_hidden_layers: int,
         *,
-        key,
-        out_features=None,
-        omega_first=30.0,
-        omega_hidden=1.0,
-        first_bias_scale=5.0,
-        scale_req_grad=False,
-    ):
+        key: Key[Array, ""],
+        out_features: int | None = None,
+        omega_first: float = 30.0,
+        omega_hidden: float = 1.0,
+        first_bias_scale: float = 5.0,
+        scale_req_grad: bool = False,
+    ) -> None:
         """Initialise the FINER body MLP."""
         out_features = _validate_body_args(num_hidden_layers, out_features)
         keys = jax.random.split(key, num_hidden_layers + 1)
