@@ -34,6 +34,7 @@ dev = [
     "optax>=0.2.8",
     "typer>=0.25.1",
     "pillow>=12.2.0",
+    "matplotlib>=3.10.9",
 ]
 
 [project.urls]
