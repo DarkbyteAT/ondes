@@ -23,10 +23,10 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, Key
 
 
-def nyquist_sigma(shape: tuple) -> float:
+def nyquist_sigma(shape: tuple[int, ...]) -> float:
     """Per-leaf sigma derived from Nyquist analysis on the longest index axis.
 
     A weight tensor of size ``N`` along its longest axis carries at most ``~N/2``
@@ -62,7 +62,7 @@ class Encoding(eqx.Module):
         raise NotImplementedError
 
     @abstractmethod
-    def __call__(self, coord):
+    def __call__(self, coord: Float[Array, "in"]) -> Float[Array, "out"]:
         """Encode ``coord`` into a ``(out_dim,)`` vector."""
         raise NotImplementedError
 
@@ -82,7 +82,7 @@ class Identity(Encoding):
 
     in_dim: int = eqx.field(static=True)
 
-    def __init__(self, in_dim: int):
+    def __init__(self, in_dim: int) -> None:
         """Store the coordinate dimension so ``out_dim`` can report it."""
         self.in_dim = in_dim
 
@@ -91,7 +91,7 @@ class Identity(Encoding):
         """Coordinate dimension passed straight through."""
         return self.in_dim
 
-    def __call__(self, coord):
+    def __call__(self, coord: Float[Array, "in"]) -> Float[Array, "in"]:
         """Return ``coord`` unchanged."""
         return coord
 
@@ -107,7 +107,7 @@ class Gaussian(Encoding):
 
     B: Float[Array, "num_freqs rank"]
 
-    def __init__(self, rank: int, num_freqs: int, sigma: float, *, key):
+    def __init__(self, rank: int, num_freqs: int, sigma: float, *, key: Key[Array, ""]) -> None:
         """Sample ``B`` from ``N(0, sigma^2)`` of shape ``(num_freqs, rank)``."""
         self.B = sigma * jax.random.normal(key, (num_freqs, rank))
 
@@ -116,7 +116,7 @@ class Gaussian(Encoding):
         """``2 * num_freqs`` — sin and cos features per sampled frequency."""
         return 2 * self.B.shape[0]
 
-    def __call__(self, coord):
+    def __call__(self, coord: Float[Array, "rank"]) -> Float[Array, "two_num_freqs"]:
         """Encode ``coord`` as ``[cos(2*pi*B@coord), sin(2*pi*B@coord)]``."""
         angles = 2.0 * jnp.pi * (self.B @ coord)
         return jnp.concatenate([jnp.cos(angles), jnp.sin(angles)])
@@ -133,7 +133,14 @@ class LearnedGaussian(Encoding):
     B_raw: Float[Array, "num_freqs rank"]
     sigma: Float[Array, ""]
 
-    def __init__(self, rank: int, num_freqs: int, *, key, sigma_init: float = float(np.pi)):
+    def __init__(
+        self,
+        rank: int,
+        num_freqs: int,
+        *,
+        key: Key[Array, ""],
+        sigma_init: float = float(np.pi),
+    ) -> None:
         """Sample unit-scale ``B_raw`` and initialise the learnable ``sigma``."""
         self.B_raw = jax.random.normal(key, (num_freqs, rank))
         self.sigma = jnp.array(float(sigma_init))
@@ -143,7 +150,7 @@ class LearnedGaussian(Encoding):
         """``2 * num_freqs`` — sin and cos features per sampled frequency."""
         return 2 * self.B_raw.shape[0]
 
-    def __call__(self, coord):
+    def __call__(self, coord: Float[Array, "rank"]) -> Float[Array, "two_num_freqs"]:
         """Encode ``coord`` with ``B = sigma * B_raw`` applied at call-time."""
         B = self.sigma * self.B_raw
         angles = 2.0 * jnp.pi * (B @ coord)
@@ -162,7 +169,7 @@ class Dyadic(Encoding):
     num_bands: int = eqx.field(static=True)
     bands: Float[Array, "num_bands"]
 
-    def __init__(self, rank: int, num_bands: int = 4):
+    def __init__(self, rank: int, num_bands: int = 4) -> None:
         """Store the coordinate rank, octave count, and pre-computed band frequencies."""
         self.rank = rank
         self.num_bands = num_bands
@@ -175,7 +182,7 @@ class Dyadic(Encoding):
         """``rank * 2 * num_bands`` — sin and cos per (axis, band) pair."""
         return self.rank * 2 * self.num_bands
 
-    def __call__(self, coord):
+    def __call__(self, coord: Float[Array, "rank"]) -> Float[Array, "out"]:
         """Encode ``coord`` with dyadic per-axis sinusoidals at ``2**k * pi`` for k in ``range(num_bands)``."""
         angles = coord[:, None] * self.bands[None, :]
         sins = jnp.sin(angles)

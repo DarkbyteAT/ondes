@@ -22,9 +22,13 @@ convention = "google"
 
 [lint.per-file-ignores]
 # Test functions are self-documenting through Given-When-Then structure and
-# descriptive test names; D rules don't add value here.
-"tests/**" = ["D"]
+# descriptive test names; D rules don't add value here. F722/F821 cover
+# jaxtyping shape-string annotations used in test helpers.
+"tests/**" = ["D", "F722", "F821"]
+# Typer requires typer.Option(...) in argument defaults; B008 fights that pattern.
+# F722/F821 cover jaxtyping shape-string annotations in example helpers.
+"examples/**" = ["B008", "F722", "F821"]
 # jaxtyping uses string-literal shape annotations (e.g. Float[Array, "out in"])
 # that ruff parses as forward references; F722/F821 fight that pattern.
-"ondes/basis.py" = ["F722", "F821"]
+"ondes/basis/**" = ["F722", "F821"]
 "ondes/encoding.py" = ["F722", "F821"]
