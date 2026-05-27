@@ -38,7 +38,12 @@ class Basis(eqx.Module):
     b: Float[Array, "out"]
     omega: Float[Array, ""]
 
-    def _pre(self, x, gamma=None, beta=None):
+    def _pre(
+        self,
+        x: Float[Array, "in"],
+        gamma: Float[Array, "out"] | None = None,
+        beta: Float[Array, "out"] | None = None,
+    ) -> Float[Array, "out"]:
         """Apply the linear map and optional FiLM modulation."""
         pre = self.W @ x + self.b
         if gamma is not None:
@@ -48,11 +53,17 @@ class Basis(eqx.Module):
         return pre
 
     @abstractmethod
-    def _activate(self, pre):
+    def _activate(self, pre: Float[Array, "out"]) -> Float[Array, "out"]:
         """Apply the basis-specific activation to ``pre``."""
         raise NotImplementedError
 
-    def __call__(self, x, *, gamma=None, beta=None):
+    def __call__(
+        self,
+        x: Float[Array, "in"],
+        *,
+        gamma: Float[Array, "out"] | None = None,
+        beta: Float[Array, "out"] | None = None,
+    ) -> Float[Array, "out"]:
         """Apply the layer to ``x`` with optional FiLM modulation.
 
         Args:
@@ -84,20 +95,30 @@ class BasisModule(Protocol):
     hidden_dim: int
     num_hidden_layers: int
 
-    def trunk(self, coord, *, film=None) -> jax.Array:
+    def trunk(self, coord: Float[Array, "in"], *, film: Float[Array, "n_layers two_hidden"] | None = None) -> jax.Array:
         """Return pre-readout hidden features (shape ``(hidden_dim,)``)."""
         ...
 
-    def __call__(self, coord, *, film=None) -> jax.Array:
+    def __call__(
+        self, coord: Float[Array, "in"], *, film: Float[Array, "n_layers two_hidden"] | None = None
+    ) -> jax.Array:
         """Forward pass; scalar when ``out_features is None``, vector otherwise."""
         ...
 
 
-def _validate_body_args(num_hidden_layers, out_features):
+def _validate_body_args(num_hidden_layers: int, out_features: int | None) -> int | None:
     """Shared constructor preconditions for the body classes.
 
     Returns ``None`` when ``out_features == 1`` (canonicalisation) so that the
     two scalar-yielding constructions produce identical pytrees.
+
+    Args:
+        num_hidden_layers: Number of stacked hidden layers; must be ``>= 1``.
+        out_features: Readout width or ``None`` for scalar output.
+
+    Returns:
+        ``None`` if ``out_features`` is ``None`` or ``1``; otherwise the
+        unchanged integer ``out_features``.
     """
     assert num_hidden_layers >= 1, f"num_hidden_layers must be >= 1, got {num_hidden_layers}"
     assert out_features is None or (
@@ -142,14 +163,19 @@ class Body(eqx.Module):
     ``trunk()`` (or ``__call__``) from it.
     """
 
-    layers: tuple
+    layers: tuple[Basis, ...]
     readout_W: Float[Array, "out hidden"]
     readout_b: Float[Array, "out"]
     out_features: int | None = eqx.field(static=True)
     hidden_dim: int = eqx.field(static=True)
     num_hidden_layers: int = eqx.field(static=True)
 
-    def trunk(self, coord, *, film=None):
+    def trunk(
+        self,
+        coord: Float[Array, "in"],
+        *,
+        film: Float[Array, "n_layers two_hidden"] | None = None,
+    ) -> Float[Array, "hidden"]:
         """Return pre-readout hidden features.
 
         Args:
@@ -171,11 +197,16 @@ class Body(eqx.Module):
                 h = layer(h)
         return h
 
-    def _readout(self, h):
+    def _readout(self, h: Float[Array, "hidden"]) -> Float[Array, "out"]:
         """Internal linear readout. Not a user extension point."""
         return self.readout_W @ h + self.readout_b
 
-    def __call__(self, coord, *, film=None):
+    def __call__(
+        self,
+        coord: Float[Array, "in"],
+        *,
+        film: Float[Array, "n_layers two_hidden"] | None = None,
+    ) -> jax.Array:
         """Forward pass.
 
         Args:
