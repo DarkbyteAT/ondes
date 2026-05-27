@@ -20,6 +20,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import typer
+from jaxtyping import Array, Float, Key
 from PIL import Image
 
 import ondes
@@ -72,12 +73,20 @@ class Model(eqx.Module):
 
     inr: ondes.Body
 
-    def __call__(self, coord):
+    def __call__(self, coord: Float[Array, "in"]) -> jax.Array:
         """Forward pass: coord-of-shape-`(in_dim,)` → scalar amplitude."""
         return self.inr(coord)
 
 
-def build_model(basis: BasisChoice, in_dim: int, hidden: int, layers: int, omega: float, *, key):
+def build_model(
+    basis: BasisChoice,
+    in_dim: int,
+    hidden: int,
+    layers: int,
+    omega: float,
+    *,
+    key: Key[Array, ""],
+) -> "Model":
     """Construct one of {SIREN, HSIREN, WIRE} from the CLI's `--basis` flag.
 
     The string-to-class lookup is the *user-side* dispatch DECISIONS.md
@@ -99,7 +108,7 @@ def build_model(basis: BasisChoice, in_dim: int, hidden: int, layers: int, omega
     return Model(inr=inr)
 
 
-def make_coords(*axes_sizes: int):
+def make_coords(*axes_sizes: int) -> Float[Array, "prod n_axes"]:
     """Build a regular grid in `[-1, 1]^len(axes_sizes)` and return `(prod, n_axes)` coords.
 
     Per-axis sizes are explicit so spatial axes (grid_n cells) and the channel
@@ -115,7 +124,10 @@ def make_coords(*axes_sizes: int):
     return jnp.stack([m.ravel() for m in mesh], axis=-1)
 
 
-def synthetic_target(name: SyntheticChoice, grid_n: int):
+def synthetic_target(
+    name: SyntheticChoice | str,
+    grid_n: int,
+) -> tuple[Float[Array, "n in_dim"], Float[Array, "n"]]:
     """Return `(coords, values)` for a named synthetic 2D target.
 
     Accepts the SyntheticChoice enum (via the CLI) or a bare string (via tests).
@@ -141,7 +153,10 @@ def synthetic_target(name: SyntheticChoice, grid_n: int):
     return coords, values
 
 
-def load_image(path: Path, grid_n: int):
+def load_image(
+    path: Path,
+    grid_n: int,
+) -> tuple[Float[Array, "n in_dim"], Float[Array, "n"]]:
     """Load a PNG/JPG and return `(coords, values)` in the value-function shape.
 
     RGB is treated as `(x, y, c) → amplitude`: channel is a coord, not an
@@ -180,13 +195,24 @@ def load_image(path: Path, grid_n: int):
     return coords, jnp.asarray(img.ravel())
 
 
-def loss_fn(model, coords, target):
+def loss_fn(
+    model: "Model",
+    coords: Float[Array, "n in_dim"],
+    target: Float[Array, "n"],
+) -> Float[Array, ""]:
     """Mean-squared error between the INR's predictions and the target."""
     pred = jax.vmap(model)(coords)
     return jnp.mean((pred - target) ** 2)
 
 
-def train(model, coords, target, *, steps: int, lr: float):
+def train(
+    model: "Model",
+    coords: Float[Array, "n in_dim"],
+    target: Float[Array, "n"],
+    *,
+    steps: int,
+    lr: float,
+) -> tuple["Model", float, float]:
     """Adam + scan training loop. Returns (trained_model, initial_loss, final_loss).
 
     The whole loop runs as a single `jax.lax.scan` so XLA compiles all `steps`
@@ -221,12 +247,12 @@ def train(model, coords, target, *, steps: int, lr: float):
 
 
 @eqx.filter_jit
-def _vmap_model(model, coords):
+def _vmap_model(model: "Model", coords: Float[Array, "n in_dim"]) -> jax.Array:
     """Pure JIT'd vmap so cache hits across calls with different model/coords."""
     return jax.vmap(model)(coords)
 
 
-def reconstruct(model, grid_n: int, in_dim: int):
+def reconstruct(model: "Model", grid_n: int, in_dim: int) -> np.ndarray:
     """Evaluate the trained model on a regular grid; returns the right-shaped array.
 
     For `in_dim == 2`: returns `(grid_n, grid_n)`.
@@ -262,7 +288,7 @@ def main(
     grid: int = typer.Option(32, help="Grid resolution (synthetic) / resize target (image)."),
     output: Path | None = typer.Option(None, help="Save reconstructed image PNG here."),
     seed: int = typer.Option(0, help="PRNG seed."),
-):
+) -> None:
     """Fit an image with an ondes INR and report initial/final loss + PSNR."""
     key = jax.random.key(seed)
     if image is not None:
