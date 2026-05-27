@@ -23,7 +23,7 @@ BODY_CLASSES = (SIREN, HSIREN, WIRE)
 LAYER_CLASSES = (SIRENLayer, HSIRENLayer, WIRELayer)
 
 
-def test_siren_init_first_layer_uses_one_over_in_dim_bound():
+def test_siren_init_first_layer_uses_one_over_in_dim_bound() -> None:
     # Given: a first-layer init with in_dim=5
     # When: drawing many weight samples
     # Then: |W|, |b| are bounded by 1/in_dim, never by sqrt(6/in_dim)/omega
@@ -36,7 +36,7 @@ def test_siren_init_first_layer_uses_one_over_in_dim_bound():
     assert siren_bound < expected_bound  # confirm the two formulas really differ
 
 
-def test_siren_init_hidden_layer_uses_sqrt6_over_omega_bound():
+def test_siren_init_hidden_layer_uses_sqrt6_over_omega_bound() -> None:
     # Given: a hidden-layer init with omega large enough to make the SIREN bound tight
     # When: drawing samples
     # Then: |W| is within sqrt(6/in_dim)/omega and strictly exceeds it never
@@ -48,7 +48,7 @@ def test_siren_init_hidden_layer_uses_sqrt6_over_omega_bound():
 
 
 @pytest.mark.parametrize("layer_cls", LAYER_CLASSES)
-def test_basis_layer_each_kind_produces_finite_output(layer_cls):
+def test_basis_layer_each_kind_produces_finite_output(layer_cls: type) -> None:
     # Given: a layer of each basis class on a fixed deterministic input
     # When: forward-passing
     # Then: output is finite and has the right shape
@@ -61,7 +61,7 @@ def test_basis_layer_each_kind_produces_finite_output(layer_cls):
 
 
 @pytest.mark.parametrize("layer_cls", LAYER_CLASSES)
-def test_basis_layer_is_subclass_of_basis_abc(layer_cls):
+def test_basis_layer_is_subclass_of_basis_abc(layer_cls: type) -> None:
     # Given: each concrete layer class
     # When: checking isinstance against the Basis ABC
     # Then: each is a Basis (the polymorphism contract — downstream code can
@@ -70,7 +70,7 @@ def test_basis_layer_is_subclass_of_basis_abc(layer_cls):
     assert isinstance(layer, Basis)
 
 
-def test_basis_abc_is_not_directly_instantiable():
+def test_basis_abc_is_not_directly_instantiable() -> None:
     # Given: the Basis ABC with an abstract _activate method
     # When: attempting to instantiate it directly
     # Then: eqx.Module + abstractmethod synthesises an instantiation guard,
@@ -81,7 +81,7 @@ def test_basis_abc_is_not_directly_instantiable():
         Basis(2, 4, omega_init=6.0, is_first=True, key=jax.random.key(0))
 
 
-def test_wire_has_s_field_siren_does_not():
+def test_wire_has_s_field_siren_does_not() -> None:
     # Given: one layer of each basis class
     # When: inspecting eqx.Module fields and pytree leaves
     # Then: only WIRELayer carries the basis-specific learnable `s`. SIREN
@@ -102,7 +102,7 @@ def test_wire_has_s_field_siren_does_not():
     assert len(wire_leaves) == 4
 
 
-def test_basis_subclass_dispatch_correct_activation():
+def test_basis_subclass_dispatch_correct_activation() -> None:
     # Given: a fixed pre-activation value and layers with omega=1 (and s=1 for WIRE)
     # When: each layer's _activate is invoked
     # Then: the result matches the analytic activation formula. Proves each
@@ -117,7 +117,7 @@ def test_basis_subclass_dispatch_correct_activation():
     assert jnp.allclose(wire._activate(pre), jnp.cos(pre) * jnp.exp(-(pre * pre)))
 
 
-def test_wire_layer_s_init_is_threaded():
+def test_wire_layer_s_init_is_threaded() -> None:
     # Given: a WIRELayer constructed with a custom s_init
     # When: inspecting the stored value
     # Then: it matches the constructor argument
@@ -125,7 +125,7 @@ def test_wire_layer_s_init_is_threaded():
     assert float(layer.s) == 2.5
 
 
-def test_wire_body_s_init_threads_to_layers():
+def test_wire_body_s_init_threads_to_layers() -> None:
     # Given: a WIRE body constructed with a non-default s_init
     # When: inspecting the s field on its WIRELayer children
     # Then: every layer carries the supplied s. Locks the body-to-layer
@@ -137,7 +137,7 @@ def test_wire_body_s_init_threads_to_layers():
 
 
 @pytest.mark.parametrize("body_cls,layer_cls", [(SIREN, SIRENLayer), (HSIREN, HSIRENLayer), (WIRE, WIRELayer)])
-def test_body_constructs_correct_layer_type(body_cls, layer_cls):
+def test_body_constructs_correct_layer_type(body_cls: type, layer_cls: type) -> None:
     # Given: each body class paired with its expected layer class
     # When: constructing the body
     # Then: every layer in body.layers is an instance of the expected class.
@@ -149,7 +149,7 @@ def test_body_constructs_correct_layer_type(body_cls, layer_cls):
         assert isinstance(layer, layer_cls)
 
 
-def test_basis_module_protocol_matches_concrete_bodies():
+def test_basis_module_protocol_matches_concrete_bodies() -> None:
     # Given: one instance of each concrete body class
     # When: checking isinstance against the BasisModule Protocol
     # Then: each body conforms structurally. Downstream consumers (loom) can
@@ -160,7 +160,7 @@ def test_basis_module_protocol_matches_concrete_bodies():
         assert isinstance(body, BasisModule)
 
 
-def test_concrete_bodies_subclass_body_base():
+def test_concrete_bodies_subclass_body_base() -> None:
     # Given: one instance of each concrete body class
     # When: checking isinstance against the public Body base
     # Then: each is a Body subclass. Nominal-typing complement to the
@@ -170,7 +170,7 @@ def test_concrete_bodies_subclass_body_base():
         assert isinstance(body, Body)
 
 
-def test_basis_body_call_is_jit_compilable():
+def test_basis_body_call_is_jit_compilable() -> None:
     # Given: a SIREN body and a coordinate input
     # When: jitting the call
     # Then: the jit-compiled function runs and matches the eager call
@@ -183,7 +183,7 @@ def test_basis_body_call_is_jit_compilable():
 
 
 @pytest.mark.parametrize("out_features,readout_out_dim", [(None, 1), (5, 5)])
-def test_wire_body_parameter_count_matches_analytic_formula(out_features, readout_out_dim):
+def test_wire_body_parameter_count_matches_analytic_formula(out_features: int | None, readout_out_dim: int) -> None:
     # Given: a WIRE body with known dims and a known out_features
     # When: counting learnable float-array leaves
     # Then: total equals sum of layer (W, b, omega, s) + readout (W, b) with the
@@ -215,7 +215,7 @@ def test_wire_body_parameter_count_matches_analytic_formula(out_features, readou
 
 
 @pytest.mark.parametrize("body_cls", (SIREN, HSIREN))
-def test_non_wire_body_parameter_count_excludes_s(body_cls):
+def test_non_wire_body_parameter_count_excludes_s(body_cls: type) -> None:
     # Given: a SIREN or HSIREN body
     # When: counting leaves
     # Then: there is exactly one omega per hidden layer and zero s leaves
@@ -234,7 +234,7 @@ def test_non_wire_body_parameter_count_excludes_s(body_cls):
     assert total == expected
 
 
-def test_basis_body_film_modulation_changes_output():
+def test_basis_body_film_modulation_changes_output() -> None:
     # Given: a body run with and without FiLM
     # When: passing a non-trivial FiLM tensor
     # Then: outputs differ (modulation is actually wired)
@@ -247,7 +247,7 @@ def test_basis_body_film_modulation_changes_output():
     assert not jnp.allclose(plain, modulated)
 
 
-def test_basis_body_out_features_none_returns_scalar():
+def test_basis_body_out_features_none_returns_scalar() -> None:
     # Given: a SIREN body constructed with default out_features
     # When: forward-passing
     # Then: output is a 0-d scalar
@@ -256,7 +256,7 @@ def test_basis_body_out_features_none_returns_scalar():
     assert y.shape == ()
 
 
-def test_basis_body_out_features_int_returns_vector():
+def test_basis_body_out_features_int_returns_vector() -> None:
     # Given: a SIREN body with out_features=4
     # When: forward-passing
     # Then: output is shape (4,)
@@ -265,7 +265,7 @@ def test_basis_body_out_features_int_returns_vector():
     assert y.shape == (4,)
 
 
-def test_basis_body_trunk_returns_hidden_features():
+def test_basis_body_trunk_returns_hidden_features() -> None:
     # Given: SIREN bodies with different out_features
     # When: calling trunk()
     # Then: shape is (hidden_dim,) and independent of out_features
@@ -283,7 +283,7 @@ def test_basis_body_trunk_returns_hidden_features():
 
 
 @pytest.mark.parametrize("body_cls", BODY_CLASSES)
-def test_basis_body_trunk_is_jit_compilable(body_cls):
+def test_basis_body_trunk_is_jit_compilable(body_cls: type) -> None:
     # Given: a body of each basis class
     # When: jitting trunk()
     # Then: jit-compiled result matches eager and has the expected shape
@@ -295,7 +295,7 @@ def test_basis_body_trunk_is_jit_compilable(body_cls):
     assert jnp.allclose(eager, jitted)
 
 
-def test_basis_body_trunk_with_film_modulation_changes_output():
+def test_basis_body_trunk_with_film_modulation_changes_output() -> None:
     # Given: trunk called with and without FiLM
     # When: a non-trivial FiLM tensor is supplied
     # Then: trunk outputs differ
@@ -308,7 +308,7 @@ def test_basis_body_trunk_with_film_modulation_changes_output():
     assert not jnp.allclose(plain, modulated)
 
 
-def test_basis_body_out_features_one_returns_scalar():
+def test_basis_body_out_features_one_returns_scalar() -> None:
     # Given: out_features=1 (the canonicalised-to-None boundary)
     # When: forward-passing
     # Then: output is a 0-d scalar — the user-facing contract for 1 is "scalar"
@@ -317,7 +317,7 @@ def test_basis_body_out_features_one_returns_scalar():
     assert y.shape == ()
 
 
-def test_basis_body_rejects_zero_hidden_layers():
+def test_basis_body_rejects_zero_hidden_layers() -> None:
     # Given: a request to build a body with no hidden layers
     # When: constructing
     # Then: the constructor rejects it — a 0-layer body would silently break
@@ -326,7 +326,7 @@ def test_basis_body_rejects_zero_hidden_layers():
         SIREN(in_dim=2, hidden_dim=8, num_hidden_layers=0, key=jax.random.key(20))
 
 
-def test_basis_body_out_features_one_canonicalises_to_none():
+def test_basis_body_out_features_one_canonicalises_to_none() -> None:
     # Given: two SIREN bodies differing only in out_features=None vs out_features=1
     # When: comparing their pytree structures
     # Then: structures are identical (canonicalisation is load-bearing for
@@ -339,7 +339,7 @@ def test_basis_body_out_features_one_canonicalises_to_none():
     assert b.out_features is None
 
 
-def test_basis_body_out_features_two_returns_vector():
+def test_basis_body_out_features_two_returns_vector() -> None:
     # Given: out_features=2 (the smallest vector-returning width)
     # When: forward-passing
     # Then: output is shape (2,) — catches off-by-one in the squeeze branch
@@ -348,7 +348,7 @@ def test_basis_body_out_features_two_returns_vector():
     assert y.shape == (2,)
 
 
-def test_basis_body_grad_through_scalar_path():
+def test_basis_body_grad_through_scalar_path() -> None:
     # Given: a default (scalar) SIREN body and a trivial loss
     # When: taking jax.grad over the body's parameters
     # Then: gradient is a pytree of finite, non-zero arrays matching the body's leaves
@@ -367,7 +367,7 @@ def test_basis_body_grad_through_scalar_path():
     assert any(bool(jnp.any(g != 0)) for g in leaves)
 
 
-def test_basis_body_grad_through_vector_path():
+def test_basis_body_grad_through_vector_path() -> None:
     # Given: an out_features=4 SIREN body and a trivial loss
     # When: taking jax.grad over the body's parameters
     # Then: gradient is a pytree of finite, non-zero arrays
@@ -385,7 +385,7 @@ def test_basis_body_grad_through_vector_path():
     assert any(bool(jnp.any(g != 0)) for g in leaves)
 
 
-def test_basis_body_vmap_over_coords_scalar():
+def test_basis_body_vmap_over_coords_scalar() -> None:
     # Given: a default (scalar) SIREN body and a batch of coordinates
     # When: vmapping the body over the leading axis
     # Then: output has shape (B,)
@@ -395,7 +395,7 @@ def test_basis_body_vmap_over_coords_scalar():
     assert out.shape == (7,)
 
 
-def test_basis_body_vmap_over_coords_vector():
+def test_basis_body_vmap_over_coords_vector() -> None:
     # Given: an out_features=3 SIREN body and a batch of coordinates
     # When: vmapping the body over the leading axis
     # Then: output has shape (B, 3)
@@ -405,7 +405,7 @@ def test_basis_body_vmap_over_coords_vector():
     assert out.shape == (7, 3)
 
 
-def test_basis_body_scalar_path_squeeze_only_feature_dim():
+def test_basis_body_scalar_path_squeeze_only_feature_dim() -> None:
     # Given: a default (scalar) SIREN body and a batch of size 1 — the case
     # where unrestricted .squeeze() would silently collapse the batch dim.
     # When: vmapping over a (1, in_dim) coord
@@ -417,7 +417,7 @@ def test_basis_body_scalar_path_squeeze_only_feature_dim():
     assert out.shape == (1,), f"expected (1,), got {out.shape}"
 
 
-def test_body_type_distinguishes_basis_kind():
+def test_body_type_distinguishes_basis_kind() -> None:
     # Given: SIREN/HSIREN/WIRE bodies with identical hyperparameters
     # When: checking type identity and the type of the constructed layers
     # Then: each is its own class — the kind discriminator is the type, not

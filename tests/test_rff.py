@@ -9,7 +9,7 @@ from ondes import RFF
 from ondes.basis import Basis, BasisModule, Body, RFFLayer
 
 
-def test_rff_layer_is_basis_subclass():
+def test_rff_layer_is_basis_subclass() -> None:
     # Given: an RFFLayer instance
     # When: checking the inheritance contract
     # Then: it's a Basis (the polymorphism contract — downstream code can
@@ -18,7 +18,7 @@ def test_rff_layer_is_basis_subclass():
     assert isinstance(layer, Basis)
 
 
-def test_rff_layer_forward_is_relu():
+def test_rff_layer_forward_is_relu() -> None:
     # Given: an RFFLayer and a pre-activation with both signs
     # When: calling _activate directly
     # Then: it matches plain ReLU exactly (RFF uses no scaling).
@@ -27,7 +27,7 @@ def test_rff_layer_forward_is_relu():
     assert jnp.allclose(layer._activate(pre), jax.nn.relu(pre))
 
 
-def test_rff_layer_omega_is_unit_placeholder():
+def test_rff_layer_omega_is_unit_placeholder() -> None:
     # Given: an RFFLayer (omega is unused by the activation)
     # When: inspecting the omega leaf
     # Then: it's a unit scalar so the leaf still exists for pytree parity with
@@ -37,7 +37,7 @@ def test_rff_layer_omega_is_unit_placeholder():
     assert float(layer.omega) == 1.0
 
 
-def test_rff_body_is_basis_module():
+def test_rff_body_is_basis_module() -> None:
     # Given: an RFF body
     # When: checking the structural and nominal type contracts
     # Then: it conforms to both BasisModule (Protocol) and Body (concrete base).
@@ -46,7 +46,7 @@ def test_rff_body_is_basis_module():
     assert isinstance(body, Body)
 
 
-def test_rff_body_b_matrix_shape_and_scale():
+def test_rff_body_b_matrix_shape_and_scale() -> None:
     # Given: an RFF body with known num_freqs / sigma
     # When: inspecting the encoding's B matrix
     # Then: B has the right shape and a sample standard deviation close to sigma
@@ -66,7 +66,7 @@ def test_rff_body_b_matrix_shape_and_scale():
     assert jnp.allclose(jnp.std(body.B), sigma, rtol=0.05)
 
 
-def test_rff_body_forward_scalar_shape():
+def test_rff_body_forward_scalar_shape() -> None:
     # Given: a default-out (scalar) RFF body and a coordinate
     # When: forward-passing
     # Then: output is a 0-d scalar
@@ -75,7 +75,7 @@ def test_rff_body_forward_scalar_shape():
     assert y.shape == ()
 
 
-def test_rff_body_forward_vector_shape():
+def test_rff_body_forward_vector_shape() -> None:
     # Given: an out_features=4 RFF body
     # When: forward-passing
     # Then: output is shape (4,)
@@ -84,7 +84,7 @@ def test_rff_body_forward_vector_shape():
     assert y.shape == (4,)
 
 
-def test_rff_body_trunk_returns_hidden_features():
+def test_rff_body_trunk_returns_hidden_features() -> None:
     # Given: an RFF body
     # When: calling trunk()
     # Then: shape is (hidden_dim,) — the encoding adds an internal layer 0
@@ -94,7 +94,7 @@ def test_rff_body_trunk_returns_hidden_features():
     assert h.shape == (32,)
 
 
-def test_rff_body_film_modulation_changes_output():
+def test_rff_body_film_modulation_changes_output() -> None:
     # Given: an RFF body run with and without FiLM
     # When: passing a non-trivial FiLM tensor
     # Then: outputs differ (modulation is wired through the MLP layers, not the
@@ -108,7 +108,7 @@ def test_rff_body_film_modulation_changes_output():
     assert not jnp.allclose(plain, modulated)
 
 
-def test_rff_body_canonicalises_out_features_one_to_none():
+def test_rff_body_canonicalises_out_features_one_to_none() -> None:
     # Given: two RFF bodies with out_features=None and out_features=1
     # When: comparing their pytree structures
     # Then: identical (the canonicalisation rule applies uniformly across bases)
@@ -120,7 +120,7 @@ def test_rff_body_canonicalises_out_features_one_to_none():
     assert b.out_features is None
 
 
-def test_rff_body_jit_matches_eager():
+def test_rff_body_jit_matches_eager() -> None:
     # Given: an RFF body and a coordinate
     # When: jit-compiling the call
     # Then: jitted output matches eager
@@ -131,7 +131,7 @@ def test_rff_body_jit_matches_eager():
     assert jnp.allclose(eager, jitted)
 
 
-def test_rff_body_grad_is_finite_and_nonzero():
+def test_rff_body_grad_is_finite_and_nonzero() -> None:
     # Given: an RFF body
     # When: taking grad of a sum-loss through the body
     # Then: gradients exist, are finite, and at least one carries signal —
@@ -150,7 +150,7 @@ def test_rff_body_grad_is_finite_and_nonzero():
     assert any(bool(jnp.any(g != 0)) for g in leaves)
 
 
-def test_rff_body_vmap_over_coords():
+def test_rff_body_vmap_over_coords() -> None:
     # Given: a batch of coordinates and an RFF body
     # When: vmapping the call
     # Then: output has the batch shape
@@ -161,7 +161,7 @@ def test_rff_body_vmap_over_coords():
 
 
 @pytest.mark.parametrize("out_features", [None, 1, 4])
-def test_rff_body_rejects_zero_hidden_layers(out_features):
+def test_rff_body_rejects_zero_hidden_layers(out_features: int | None) -> None:
     # Given: a request to build with num_hidden_layers=0
     # When: constructing
     # Then: constructor rejects — the readout shape contract requires at least
@@ -185,7 +185,7 @@ def test_rff_fix_encoding_mask_isolates_B_matrix():
     assert not eqx.is_array(learnable.B)
 
 
-def test_rff_body_layer_pytree_homogeneous():
+def test_rff_body_layer_pytree_homogeneous() -> None:
     # Given: an RFF body where in_dim == hidden_dim
     # When: comparing the pytree structure of every MLP layer
     # Then: identical (no static-field discriminator on the layer, scan-friendly).

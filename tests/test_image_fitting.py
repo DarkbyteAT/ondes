@@ -23,7 +23,7 @@ from examples.fit_image import Model, loss_fn, synthetic_target, train
 
 
 @pytest.mark.parametrize("target_name", ["sinusoid", "gaussian_bump", "mandelbrot"])
-def test_siren_fits_synthetic_target(target_name):
+def test_siren_fits_synthetic_target(target_name: str) -> None:
     # Given: one of the three synthetic targets, evaluated on a small 16x16
     # grid; a SIREN with the same defaults as the `siren` subcommand uses
     # (hidden=64, layers=3, ω=30); Adam at lr=1e-3 for 200 steps (the CLI
