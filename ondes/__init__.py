@@ -7,12 +7,14 @@ class per encoding kind — no string discriminators, no factory functions.
 
 from ondes.basis import (
     HSIREN,
+    RFF,
     SIREN,
     WIRE,
     Basis,
     BasisModule,
     Body,
     HSIRENLayer,
+    RFFLayer,
     SIRENLayer,
     WIRELayer,
     siren_init,
@@ -38,6 +40,8 @@ __all__ = [
     "HSIRENLayer",
     "Identity",
     "LearnedGaussian",
+    "RFF",
+    "RFFLayer",
     "SIREN",
     "SIRENLayer",
     "WIRE",
