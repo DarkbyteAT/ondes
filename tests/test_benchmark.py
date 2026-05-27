@@ -25,9 +25,15 @@ import jax
 import pytest
 
 from ondes import SIREN
+from ondes.basis import Body
 
 
-def _time_jit_vmap(body, batch, n_warmup=50, n_iters=100):
+def _time_jit_vmap(
+    body: Body,
+    batch: jax.Array,
+    n_warmup: int = 50,
+    n_iters: int = 100,
+) -> tuple[float, float]:
     """Return (median_ms, stdev_ms) of jit(vmap(body))(batch).
 
     The function is built once and compiled by the warmup pass; the timed
@@ -61,7 +67,7 @@ def _time_jit_vmap(body, batch, n_warmup=50, n_iters=100):
 
 
 @pytest.mark.benchmark
-def test_forward_pass_microbenchmark(capsys):
+def test_forward_pass_microbenchmark(capsys: pytest.CaptureFixture[str]) -> None:
     # Given: a canonical SIREN body (in_dim=2, hidden_dim=64, num_hidden_layers=4)
     # When: timing JIT-compiled jax.vmap over a batch of 1024 coords
     # Then: report median + stdev over 100 trials post-warmup. The test does

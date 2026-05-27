@@ -9,7 +9,7 @@ from ondes import FINER
 from ondes.basis import Basis, BasisModule, Body, FINERLayer
 
 
-def test_finer_layer_is_basis_subclass():
+def test_finer_layer_is_basis_subclass() -> None:
     # Given: a FINERLayer
     # When: checking inheritance
     # Then: it's a Basis (polymorphism contract for downstream typing)
@@ -17,7 +17,7 @@ def test_finer_layer_is_basis_subclass():
     assert isinstance(layer, Basis)
 
 
-def test_finer_activation_matches_paper_formula():
+def test_finer_activation_matches_paper_formula() -> None:
     # Given: a FINERLayer with omega=1, first layer
     # When: evaluating _activate on known pre-activations
     # Then: output matches sin((|pre|+1) * pre). The activation IS FINER's
@@ -29,7 +29,7 @@ def test_finer_activation_matches_paper_formula():
     assert jnp.allclose(layer._activate(pre), expected)
 
 
-def test_finer_first_layer_bias_within_first_bias_scale():
+def test_finer_first_layer_bias_within_first_bias_scale() -> None:
     # Given: a first FINER layer with first_bias_scale=10
     # When: inspecting layer.b
     # Then: |b| <= first_bias_scale (uniform-init bound). The wider bias is
@@ -39,7 +39,7 @@ def test_finer_first_layer_bias_within_first_bias_scale():
     assert float(jnp.max(jnp.abs(layer.b))) <= fbs + 1e-5
 
 
-def test_finer_hidden_layer_bias_uses_siren_bound_not_first_bias_scale():
+def test_finer_hidden_layer_bias_uses_siren_bound_not_first_bias_scale() -> None:
     # Given: a hidden (non-first) FINER layer with a deliberately tiny SIREN bound
     # When: comparing the bias magnitude to first_bias_scale
     # Then: |b| is much smaller than first_bias_scale — the FINER trick is
@@ -55,7 +55,7 @@ def test_finer_hidden_layer_bias_uses_siren_bound_not_first_bias_scale():
     assert siren_bound < fbs
 
 
-def test_finer_scale_req_grad_false_stops_gradient_through_scale():
+def test_finer_scale_req_grad_false_stops_gradient_through_scale() -> None:
     # Given: two layers with scale_req_grad=False and =True
     # When: taking gradient of the activation w.r.t. pre
     # Then: the gradient differs — scale_req_grad=False uses stop_gradient on
@@ -75,7 +75,7 @@ def test_finer_scale_req_grad_false_stops_gradient_through_scale():
     assert not jnp.allclose(g_stop, g_full)
 
 
-def test_finer_body_is_basis_module():
+def test_finer_body_is_basis_module() -> None:
     # Given: a FINER body
     # When: checking the structural and nominal type contracts
     # Then: it satisfies both
@@ -84,7 +84,7 @@ def test_finer_body_is_basis_module():
     assert isinstance(body, Body)
 
 
-def test_finer_body_forward_scalar_shape():
+def test_finer_body_forward_scalar_shape() -> None:
     # Given: a default-out FINER body
     # When: forward-passing
     # Then: output is a 0-d scalar
@@ -93,7 +93,7 @@ def test_finer_body_forward_scalar_shape():
     assert y.shape == ()
 
 
-def test_finer_body_forward_vector_shape():
+def test_finer_body_forward_vector_shape() -> None:
     # Given: out_features=3
     # When: forward-passing
     # Then: output shape (3,)
@@ -102,7 +102,7 @@ def test_finer_body_forward_vector_shape():
     assert y.shape == (3,)
 
 
-def test_finer_body_trunk_shape():
+def test_finer_body_trunk_shape() -> None:
     # Given: a FINER body
     # When: calling trunk()
     # Then: shape is (hidden_dim,)
@@ -111,7 +111,7 @@ def test_finer_body_trunk_shape():
     assert h.shape == (32,)
 
 
-def test_finer_body_first_bias_scale_threads_to_first_layer_only():
+def test_finer_body_first_bias_scale_threads_to_first_layer_only() -> None:
     # Given: a FINER body constructed with a custom first_bias_scale
     # When: inspecting layer biases
     # Then: only layer 0's bias respects the FINER wider bound; layers 1+
@@ -124,7 +124,7 @@ def test_finer_body_first_bias_scale_threads_to_first_layer_only():
         assert float(jnp.max(jnp.abs(layer.b))) <= siren_bound + 1e-5
 
 
-def test_finer_body_film_modulation_changes_output():
+def test_finer_body_film_modulation_changes_output() -> None:
     # Given: a FINER body run with and without FiLM
     # When: passing a non-trivial FiLM tensor
     # Then: outputs differ
@@ -137,7 +137,7 @@ def test_finer_body_film_modulation_changes_output():
     assert not jnp.allclose(plain, modulated)
 
 
-def test_finer_body_jit_matches_eager():
+def test_finer_body_jit_matches_eager() -> None:
     # Given: a FINER body
     # When: jit-compiling the call
     # Then: jit matches eager
@@ -148,7 +148,7 @@ def test_finer_body_jit_matches_eager():
     assert jnp.allclose(eager, jitted)
 
 
-def test_finer_body_grad_is_finite_and_nonzero():
+def test_finer_body_grad_is_finite_and_nonzero() -> None:
     # Given: a FINER body
     # When: taking grad of a sum-loss
     # Then: gradients finite and at least one carries signal
@@ -166,7 +166,7 @@ def test_finer_body_grad_is_finite_and_nonzero():
     assert any(bool(jnp.any(g != 0)) for g in leaves)
 
 
-def test_finer_body_vmap_over_coords():
+def test_finer_body_vmap_over_coords() -> None:
     # Given: a batch of coords and a FINER body
     # When: vmapping
     # Then: output carries the batch axis
@@ -176,7 +176,7 @@ def test_finer_body_vmap_over_coords():
     assert out.shape == (5,)
 
 
-def test_finer_body_canonicalises_out_features_one():
+def test_finer_body_canonicalises_out_features_one() -> None:
     # Given: two FINER bodies differing only in out_features
     # When: comparing pytree structure
     # Then: identical
@@ -186,7 +186,7 @@ def test_finer_body_canonicalises_out_features_one():
     assert jax.tree_util.tree_structure(a) == jax.tree_util.tree_structure(b)
 
 
-def test_finer_body_layer_pytree_homogeneous():
+def test_finer_body_layer_pytree_homogeneous() -> None:
     # Given: a FINER body
     # When: comparing pytree structure of each layer
     # Then: identical — scale_req_grad is static but uniform across all
@@ -199,7 +199,7 @@ def test_finer_body_layer_pytree_homogeneous():
         assert jax.tree_util.tree_structure(layer) == ref
 
 
-def test_finer_body_rejects_zero_hidden_layers():
+def test_finer_body_rejects_zero_hidden_layers() -> None:
     # Given: 0 hidden layers
     # When: constructing
     # Then: assertion fires

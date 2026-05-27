@@ -10,7 +10,7 @@ from ondes.basis import BasisModule, Body
 from ondes.basis.bacon import BACONFilter
 
 
-def test_bacon_body_conforms_to_basis_module_and_body():
+def test_bacon_body_conforms_to_basis_module_and_body() -> None:
     # Given: a BACON body
     # When: checking the structural and nominal type contracts
     # Then: it satisfies both, so downstream code that types against either
@@ -20,7 +20,7 @@ def test_bacon_body_conforms_to_basis_module_and_body():
     assert isinstance(body, Body)
 
 
-def test_bacon_body_forward_scalar_shape():
+def test_bacon_body_forward_scalar_shape() -> None:
     # Given: a default-out BACON body
     # When: forward-passing
     # Then: output is a 0-d scalar
@@ -29,7 +29,7 @@ def test_bacon_body_forward_scalar_shape():
     assert y.shape == ()
 
 
-def test_bacon_body_forward_vector_shape():
+def test_bacon_body_forward_vector_shape() -> None:
     # Given: out_features=3
     # When: forward-passing
     # Then: output shape is (3,)
@@ -38,7 +38,7 @@ def test_bacon_body_forward_vector_shape():
     assert y.shape == (3,)
 
 
-def test_bacon_filter_frequencies_are_integer_multiples_of_quantization():
+def test_bacon_filter_frequencies_are_integer_multiples_of_quantization() -> None:
     # Given: a BACONFilter with known dq
     # When: inspecting filter.W
     # Then: every entry is an integer multiple of dq (the band-limiting proof
@@ -50,7 +50,7 @@ def test_bacon_filter_frequencies_are_integer_multiples_of_quantization():
     assert float(jnp.max(jnp.abs(residuals))) < 1e-5
 
 
-def test_bacon_filter_frequencies_within_per_layer_bandwidth():
+def test_bacon_filter_frequencies_within_per_layer_bandwidth() -> None:
     # Given: a BACONFilter with bandwidth B
     # When: inspecting filter.W
     # Then: every entry is in [-B, B] (paper-mandated per-layer cap; failure
@@ -61,7 +61,7 @@ def test_bacon_filter_frequencies_within_per_layer_bandwidth():
     assert float(jnp.max(jnp.abs(f.W))) <= bandwidth + 1e-5
 
 
-def test_bacon_filter_frequencies_include_both_signs_and_zero():
+def test_bacon_filter_frequencies_include_both_signs_and_zero() -> None:
     # Given: a wide filter
     # When: counting unique signs
     # Then: the distribution spans negative, zero, and positive integer
@@ -73,7 +73,7 @@ def test_bacon_filter_frequencies_include_both_signs_and_zero():
     assert bool(jnp.any(f.W == 0.0))
 
 
-def test_bacon_per_layer_bandwidth_matches_paper_formula():
+def test_bacon_per_layer_bandwidth_matches_paper_formula() -> None:
     # Given: a BACON body
     # When: inspecting the per-layer bandwidth schedule
     # Then: each bandwidth equals round(pi * max_freq / (N+1) / dq) * dq
@@ -95,7 +95,7 @@ def test_bacon_per_layer_bandwidth_matches_paper_formula():
         assert float(bw) == pytest.approx(expected)
 
 
-def test_bacon_output_bandwidth_property_equals_sum_of_per_layer():
+def test_bacon_output_bandwidth_property_equals_sum_of_per_layer() -> None:
     # Given: a BACON body
     # When: reading output_bandwidth
     # Then: equals sum of per-layer bandwidths — this IS the network-level cap
@@ -104,7 +104,7 @@ def test_bacon_output_bandwidth_property_equals_sum_of_per_layer():
     assert body.output_bandwidth == pytest.approx(float(jnp.sum(body.bandwidths)))
 
 
-def test_bacon_has_n_plus_one_filters():
+def test_bacon_has_n_plus_one_filters() -> None:
     # Given: a BACON body with num_hidden_layers=4
     # When: counting filters
     # Then: there are 5 (mirrors MFN's invariant — z_0 = g_0(x); z_{i+1} =
@@ -115,7 +115,7 @@ def test_bacon_has_n_plus_one_filters():
         assert isinstance(f, BACONFilter)
 
 
-def test_bacon_body_film_modulation_changes_output():
+def test_bacon_body_film_modulation_changes_output() -> None:
     # Given: a BACON body run with and without FiLM
     # When: passing a non-trivial FiLM tensor
     # Then: outputs differ
@@ -128,7 +128,7 @@ def test_bacon_body_film_modulation_changes_output():
     assert not jnp.allclose(plain, modulated)
 
 
-def test_bacon_body_jit_matches_eager():
+def test_bacon_body_jit_matches_eager() -> None:
     # Given: a BACON body and a coord
     # When: jit-compiling
     # Then: matches eager
@@ -139,7 +139,7 @@ def test_bacon_body_jit_matches_eager():
     assert jnp.allclose(eager, jitted)
 
 
-def test_bacon_body_grad_is_finite_and_nonzero():
+def test_bacon_body_grad_is_finite_and_nonzero() -> None:
     # Given: a BACON body
     # When: taking grad of a sum-loss
     # Then: gradients are finite and at least one carries signal
@@ -157,7 +157,7 @@ def test_bacon_body_grad_is_finite_and_nonzero():
     assert any(bool(jnp.any(g != 0)) for g in leaves)
 
 
-def test_bacon_fix_filters_mask_isolates_filter_weights():
+def test_bacon_fix_filters_mask_isolates_filter_weights() -> None:
     # Given: a BACON body and its fix-filters mask
     # When: partitioning the body
     # Then: the "fixed" half contains exactly the filter.W arrays and nothing
@@ -174,7 +174,7 @@ def test_bacon_fix_filters_mask_isolates_filter_weights():
         assert not eqx.is_array(learnable.filters[i].W)
 
 
-def test_bacon_body_vmap_over_coords():
+def test_bacon_body_vmap_over_coords() -> None:
     # Given: a batch of coords
     # When: vmapping the body
     # Then: output carries the batch axis
@@ -184,7 +184,7 @@ def test_bacon_body_vmap_over_coords():
     assert out.shape == (4,)
 
 
-def test_bacon_body_canonicalises_out_features_one():
+def test_bacon_body_canonicalises_out_features_one() -> None:
     # Given: two BACON bodies differing only in out_features=None vs 1
     # When: comparing pytree structures
     # Then: identical
@@ -194,7 +194,7 @@ def test_bacon_body_canonicalises_out_features_one():
     assert jax.tree_util.tree_structure(a) == jax.tree_util.tree_structure(b)
 
 
-def test_bacon_body_rejects_zero_hidden_layers():
+def test_bacon_body_rejects_zero_hidden_layers() -> None:
     # Given: 0 recurrence steps
     # When: constructing
     # Then: assertion fires (shared by all bodies via _validate_body_args)

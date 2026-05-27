@@ -10,7 +10,7 @@ from ondes.basis import BasisModule, Body
 from ondes.basis.mfn import FourierFilter
 
 
-def test_pnf_body_conforms_to_basis_module_and_body():
+def test_pnf_body_conforms_to_basis_module_and_body() -> None:
     # Given: a PNF body
     # When: checking the structural and nominal type contracts
     # Then: it satisfies both, so downstream code that types against either
@@ -20,7 +20,7 @@ def test_pnf_body_conforms_to_basis_module_and_body():
     assert isinstance(body, Body)
 
 
-def test_pnf_body_forward_scalar_shape():
+def test_pnf_body_forward_scalar_shape() -> None:
     # Given: a default-out PNF body
     # When: forward-passing
     # Then: output is a 0-d scalar
@@ -29,7 +29,7 @@ def test_pnf_body_forward_scalar_shape():
     assert y.shape == ()
 
 
-def test_pnf_body_forward_vector_shape():
+def test_pnf_body_forward_vector_shape() -> None:
     # Given: out_features=4
     # When: forward-passing
     # Then: output shape (4,)
@@ -38,7 +38,7 @@ def test_pnf_body_forward_vector_shape():
     assert y.shape == (4,)
 
 
-def test_pnf_body_trunk_shape():
+def test_pnf_body_trunk_shape() -> None:
     # Given: a PNF body
     # When: calling trunk()
     # Then: shape is (hidden_dim,)
@@ -47,7 +47,7 @@ def test_pnf_body_trunk_shape():
     assert h.shape == (32,)
 
 
-def test_pnf_has_mix_matrix_per_recurrence_step():
+def test_pnf_has_mix_matrix_per_recurrence_step() -> None:
     # Given: a PNF body with num_hidden_layers=4
     # When: inspecting mix_W
     # Then: shape is (4, hidden_dim, hidden_dim) — one mix matrix per step.
@@ -57,7 +57,7 @@ def test_pnf_has_mix_matrix_per_recurrence_step():
     assert body.mix_W.shape == (4, 8, 8)
 
 
-def test_pnf_has_n_plus_one_fourier_filters():
+def test_pnf_has_n_plus_one_fourier_filters() -> None:
     # Given: a PNF body with num_hidden_layers=4
     # When: inspecting filters
     # Then: there are 5 FourierFilter instances (same invariant as MFN)
@@ -67,7 +67,7 @@ def test_pnf_has_n_plus_one_fourier_filters():
         assert isinstance(f, FourierFilter)
 
 
-def test_pnf_mix_matrix_changes_output_vs_zero_mix():
+def test_pnf_mix_matrix_changes_output_vs_zero_mix() -> None:
     # Given: a PNF body and the same body with mix_W zeroed
     # When: comparing outputs
     # Then: they differ — the mix layer must actually contribute. With mix_W=0
@@ -79,7 +79,7 @@ def test_pnf_mix_matrix_changes_output_vs_zero_mix():
     assert not jnp.allclose(body(coord), zeroed_mix(coord))
 
 
-def test_pnf_body_film_modulation_changes_output():
+def test_pnf_body_film_modulation_changes_output() -> None:
     # Given: a PNF body run with and without FiLM
     # When: a non-trivial FiLM tensor is supplied
     # Then: outputs differ
@@ -92,7 +92,7 @@ def test_pnf_body_film_modulation_changes_output():
     assert not jnp.allclose(plain, modulated)
 
 
-def test_pnf_body_jit_matches_eager():
+def test_pnf_body_jit_matches_eager() -> None:
     # Given: a PNF body and a coord
     # When: jit-compiling
     # Then: matches eager
@@ -103,7 +103,7 @@ def test_pnf_body_jit_matches_eager():
     assert jnp.allclose(eager, jitted)
 
 
-def test_pnf_body_grad_is_finite_and_nonzero():
+def test_pnf_body_grad_is_finite_and_nonzero() -> None:
     # Given: a PNF body
     # When: taking grad of a sum-loss
     # Then: gradients finite and at least one carries signal (including the
@@ -123,7 +123,7 @@ def test_pnf_body_grad_is_finite_and_nonzero():
     assert any(bool(jnp.any(g != 0)) for g in leaves)
 
 
-def test_pnf_mix_matrix_receives_gradient():
+def test_pnf_mix_matrix_receives_gradient() -> None:
     # Given: a PNF body and a sum-loss
     # When: filtering grads to the mix matrix sub-tree
     # Then: at least one entry is non-zero. Specifically tests the mix path —
@@ -139,7 +139,7 @@ def test_pnf_mix_matrix_receives_gradient():
     assert bool(jnp.any(grad.mix_W != 0))
 
 
-def test_pnf_body_vmap_over_coords():
+def test_pnf_body_vmap_over_coords() -> None:
     # Given: a batch of coords
     # When: vmapping
     # Then: output carries the batch axis
@@ -149,7 +149,7 @@ def test_pnf_body_vmap_over_coords():
     assert out.shape == (5,)
 
 
-def test_pnf_body_canonicalises_out_features_one():
+def test_pnf_body_canonicalises_out_features_one() -> None:
     # Given: two PNF bodies differing only in out_features=None vs 1
     # When: comparing pytree structures
     # Then: identical
@@ -159,7 +159,7 @@ def test_pnf_body_canonicalises_out_features_one():
     assert jax.tree_util.tree_structure(a) == jax.tree_util.tree_structure(b)
 
 
-def test_pnf_body_rejects_zero_hidden_layers():
+def test_pnf_body_rejects_zero_hidden_layers() -> None:
     # Given: 0 recurrence steps
     # When: constructing
     # Then: assertion fires
