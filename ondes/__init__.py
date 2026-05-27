@@ -7,6 +7,7 @@ class per encoding kind — no string discriminators, no factory functions.
 
 from ondes.basis import (
     BACON,
+    FINER,
     HSIREN,
     RFF,
     SIREN,
@@ -14,6 +15,7 @@ from ondes.basis import (
     Basis,
     BasisModule,
     Body,
+    FINERLayer,
     FourierMFN,
     GaborMFN,
     HSIRENLayer,
@@ -39,6 +41,8 @@ __all__ = [
     "Body",
     "Dyadic",
     "Encoding",
+    "FINER",
+    "FINERLayer",
     "FourierMFN",
     "GaborMFN",
     "Gaussian",
