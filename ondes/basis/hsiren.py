@@ -25,7 +25,14 @@ class HSIRENLayer(Basis):
         self.omega = jnp.array(float(omega_init))
 
     def _activate(self, pre):
-        return jnp.sin(self.omega * jnp.sinh(pre))
+        # `0.5 * (exp(pre) - exp(-pre))` instead of `jnp.sinh(pre)` because
+        # jax-mps 0.10.1 crashes when lowering `sinh` (TypeError in
+        # `aval_to_ir_type`). The two are mathematically identical for the
+        # finite pre-activation range SIREN init produces (|pre| ≲ 1), and
+        # this rewrite keeps the body runnable on every JAX backend instead
+        # of just CPU/CUDA/TPU. Revisit if jax-mps fixes the lowering.
+        sinh_pre = 0.5 * (jnp.exp(pre) - jnp.exp(-pre))
+        return jnp.sin(self.omega * sinh_pre)
 
 
 class HSIREN(Body):
