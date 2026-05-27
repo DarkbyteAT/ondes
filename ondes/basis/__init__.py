@@ -12,6 +12,7 @@ from ondes.basis.bacon import BACON
 from ondes.basis.finer import FINER, FINERLayer
 from ondes.basis.hsiren import HSIREN, HSIRENLayer
 from ondes.basis.mfn import FourierMFN, GaborMFN
+from ondes.basis.pnf import PNF
 from ondes.basis.rff import RFF, RFFLayer
 from ondes.basis.siren import SIREN, SIRENLayer, siren_init
 from ondes.basis.wire import WIRE, WIRELayer
@@ -28,6 +29,7 @@ __all__ = [
     "GaborMFN",
     "HSIREN",
     "HSIRENLayer",
+    "PNF",
     "RFF",
     "RFFLayer",
     "SIREN",
