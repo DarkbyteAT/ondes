@@ -6,6 +6,7 @@ class per encoding kind — no string discriminators, no factory functions.
 """
 
 from ondes.basis import (
+    BACON,
     HSIREN,
     RFF,
     SIREN,
@@ -32,6 +33,7 @@ from ondes.encoding import (
 
 
 __all__ = [
+    "BACON",
     "Basis",
     "BasisModule",
     "Body",
