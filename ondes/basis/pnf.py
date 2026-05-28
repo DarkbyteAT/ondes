@@ -125,7 +125,7 @@ class PNF(Body):
         """
         z = self.filters[0](coord)
         for i in range(self.num_hidden_layers):
-            pre = self.mix_W[i] @ z + self.recurrence_W[i] @ z + self.recurrence_b[i]
+            pre = (self.mix_W[i] + self.recurrence_W[i]) @ z + self.recurrence_b[i]
             if film is not None:
                 gamma = film[i, : self.hidden_dim]
                 beta = film[i, self.hidden_dim :]
