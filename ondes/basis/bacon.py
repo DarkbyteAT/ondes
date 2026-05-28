@@ -43,14 +43,14 @@ def _bacon_filter_freqs(in_dim, hidden_dim, bandwidth, quantization_interval, ke
     This is the exact procedure in the reference implementation's
     ``FourierLayer.__init__``.
     """
-    k = int(round(float(bandwidth) / float(quantization_interval)))
+    k = round(bandwidth / quantization_interval)
     if k <= 0:
         # Degenerate per-layer bandwidth (smaller than the quantisation step);
         # use a single integer at the zero frequency rather than crash.
         return jnp.zeros((hidden_dim, in_dim))
     # Draw integers in [0, 2k+1) then shift to [-k, k] inclusive.
     ints = jax.random.randint(key, (hidden_dim, in_dim), 0, 2 * k + 1)
-    return (ints.astype(jnp.float32) - k) * float(quantization_interval)
+    return (ints.astype(jnp.float32) - k) * quantization_interval
 
 
 class BACONFilter(eqx.Module):
@@ -175,14 +175,19 @@ class BACON(Body):
         self.num_hidden_layers = num_hidden_layers
 
     @property
-    def output_bandwidth(self) -> float:
+    def output_bandwidth(self) -> jax.Array:
         """Analytic upper bound on the network's output frequency content.
 
         Equal to the sum of per-filter bandwidths along the multiplicative
         recurrence (paper Section 3, "bandwidth analysis"). For the default
         schedule this equals ``max_freq`` (within one quantisation step).
+
+        Returned as a JAX scalar so the property is safe to call inside a
+        ``jit``-compiled function (e.g. as part of a bandwidth-regularised
+        loss). Cast to Python ``float`` at the call site when an eager
+        diagnostic value is wanted.
         """
-        return float(jnp.sum(self.bandwidths))
+        return jnp.sum(self.bandwidths)
 
     def fix_filters_mask(self):
         """Return a pytree mask that selects only the learnable (non-filter-W) leaves.
