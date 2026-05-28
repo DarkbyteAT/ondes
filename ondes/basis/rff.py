@@ -32,10 +32,8 @@ def _kaiming_uniform_relu(in_dim, out_dim, key):
     that benefits from the same variance assumption).
     """
     bound = jnp.sqrt(6.0 / in_dim)
-    kw, kb = jax.random.split(key)
-    W = jax.random.uniform(kw, (out_dim, in_dim), minval=-bound, maxval=bound)
+    W = jax.random.uniform(key, (out_dim, in_dim), minval=-bound, maxval=bound)
     b = jnp.zeros((out_dim,))
-    del kb
     return W, b
 
 
