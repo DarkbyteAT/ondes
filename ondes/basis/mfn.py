@@ -49,7 +49,7 @@ class FourierFilter(eqx.Module):
 
     def __init__(self, in_dim, hidden_dim, input_scale, n_layers, *, key):
         """Sample filter weights at ``input_scale / sqrt(n_layers + 1)`` and uniform-phase bias."""
-        bound = float(input_scale) / jnp.sqrt(n_layers + 1.0)
+        bound = input_scale / ((n_layers + 1.0) ** 0.5)
         kw, kb = jax.random.split(key)
         self.W = jax.random.uniform(kw, (hidden_dim, in_dim), minval=-bound, maxval=bound)
         self.b = jax.random.uniform(kb, (hidden_dim,), minval=-jnp.pi, maxval=jnp.pi)
@@ -80,9 +80,9 @@ class GaborFilter(eqx.Module):
         """Sample mu uniformly in [-1, 1], gamma from Gamma(alpha/(n_layers+1), beta), and weights ~ N(0, gamma)."""
         k_mu, k_gamma, k_w, k_b = jax.random.split(key, 4)
         self.mu = jax.random.uniform(k_mu, (hidden_dim, in_dim), minval=-1.0, maxval=1.0)
-        shape = float(alpha) / (n_layers + 1.0)
+        gamma_shape = float(alpha) / (n_layers + 1.0)
         # jax.random.gamma returns samples from Gamma(shape) with rate 1; divide by beta to apply the rate.
-        self.gamma = jax.random.gamma(k_gamma, shape, (hidden_dim,)) / float(beta)
+        self.gamma = jax.random.gamma(k_gamma, gamma_shape, (hidden_dim,)) / float(beta)
         # Weights drawn from N(0, gamma): per-row std matches that row's gamma so the
         # filter's spatial frequency couples to its envelope width.
         std = jnp.sqrt(self.gamma)
