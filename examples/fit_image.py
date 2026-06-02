@@ -500,11 +500,6 @@ def main(
     gif_path = output_dir / "recon_evolution.gif"
     snapshot_paths: list[Path] = []
     history: list[tuple[int, float]] = []
-    # Open CSV once and write header; per-step appends share the handle. Faster
-    # than re-opening per step, and `flush()` per row keeps `tail -f` live.
-    csv_file = csv_path.open("w", newline="")
-    csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(["step", "loss", "psnr_db"])
 
     # Descriptive run title for the loss-curve SVG. Fixed across re-renders —
     # live metrics go to a corner annotation, not the title.
@@ -513,51 +508,57 @@ def main(
         f"{basis} fit · {target_name} · {grid}x{grid} · hidden={hidden} layers={layers} ω={omega:g} · Adam({lr:g})"
     )
 
-    def on_step(step: int, loss: float) -> None:
-        # Per-step, fires from inside scan via io_callback (ordered). Stay cheap:
-        # CSV append + history list + occasional console print. Matplotlib lives
-        # in on_chunk because rendering blocks the JAX thread.
-        psnr = -10.0 * np.log10(max(loss, 1e-12))
-        history.append((step, loss))
-        csv_writer.writerow([step, f"{loss:.6g}", f"{psnr:.4f}"])
-        csv_file.flush()
-        # Always log step 0 (the baseline) and step `steps` (the end); otherwise
-        # gate to every `log_every` steps to avoid stdout flood at 2500 steps.
-        if step == 0 or step == steps or step % log_every == 0:
-            typer.echo(f"  step {step:>6d}  loss {loss:.6g}  PSNR {psnr:.2f} dB")
+    # Open CSV once and write header; per-step appends share the handle. Faster
+    # than re-opening per step, and `flush()` per row keeps `tail -f` live. The
+    # `with` block guarantees the handle closes even if training raises.
+    with csv_path.open("w", newline="") as csv_file:
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(["step", "loss", "psnr_db"])
 
-    def on_chunk(*, step: int, loss: float, model) -> None:
-        # Per-chunk, fires from Python. Heavy work goes here.
-        _write_loss_curve(history, curve_path, title=curve_title)
-        chunk_idx = step // chunk_size
-        if chunk_idx % snapshot_every == 0:
-            snap_path = output_dir / f"recon_step_{step:06d}.png"
-            _save_recon_png(model, grid, in_dim, target, snap_path)
-            snapshot_paths.append(snap_path)
-            # Rebuild GIF cumulatively so the evolution artifact is always
-            # current — scrub-via-Finder uses the PNGs, at-a-glance uses the GIF.
-            _write_evolution_gif(snapshot_paths, gif_path)
+        def on_step(step: int, loss: float) -> None:
+            # Per-step, fires from inside scan via io_callback (ordered). Stay cheap:
+            # CSV append + history list + occasional console print. Matplotlib lives
+            # in on_chunk because rendering blocks the JAX thread.
+            psnr = -10.0 * np.log10(max(loss, 1e-12))
+            history.append((step, loss))
+            csv_writer.writerow([step, f"{loss:.6g}", f"{psnr:.4f}"])
+            csv_file.flush()
+            # Always log step 0 (the baseline) and step `steps` (the end); otherwise
+            # gate to every `log_every` steps to avoid stdout flood at 2500 steps.
+            if step == 0 or step == steps or step % log_every == 0:
+                typer.echo(f"  step {step:>6d}  loss {loss:.6g}  PSNR {psnr:.2f} dB")
 
-    # Seed the evolution GIF with the random-init reconstruction so frame 0
-    # shows the baseline the optimiser starts from. Without this the GIF lies
-    # about where training began.
-    initial_snap = output_dir / "recon_step_000000.png"
-    _save_recon_png(model, grid, in_dim, target, initial_snap)
-    snapshot_paths.append(initial_snap)
+        def on_chunk(*, step: int, loss: float, model) -> None:
+            # Per-chunk, fires from Python. Heavy work goes here.
+            _write_loss_curve(history, curve_path, title=curve_title)
+            chunk_idx = step // chunk_size
+            if chunk_idx % snapshot_every == 0:
+                snap_path = output_dir / f"recon_step_{step:06d}.png"
+                _save_recon_png(model, grid, in_dim, target, snap_path)
+                snapshot_paths.append(snap_path)
+                # Rebuild GIF cumulatively so the evolution artifact is always
+                # current — scrub-via-Finder uses the PNGs, at-a-glance uses the GIF.
+                _write_evolution_gif(snapshot_paths, gif_path)
 
-    typer.echo(f"run dir: {output_dir}")
-    typer.echo(f"training {steps} steps in chunks of {chunk_size} (per-step CSV, per-chunk plot)...")
-    model, initial_loss, final_loss = train(
-        model,
-        coords,
-        target,
-        steps=steps,
-        lr=lr,
-        chunk_size=chunk_size,
-        on_step=on_step,
-        on_chunk=on_chunk,
-    )
-    csv_file.close()
+        # Seed the evolution GIF with the random-init reconstruction so frame 0
+        # shows the baseline the optimiser starts from. Without this the GIF lies
+        # about where training began.
+        initial_snap = output_dir / "recon_step_000000.png"
+        _save_recon_png(model, grid, in_dim, target, initial_snap)
+        snapshot_paths.append(initial_snap)
+
+        typer.echo(f"run dir: {output_dir}")
+        typer.echo(f"training {steps} steps in chunks of {chunk_size} (per-step CSV, per-chunk plot)...")
+        model, initial_loss, final_loss = train(
+            model,
+            coords,
+            target,
+            steps=steps,
+            lr=lr,
+            chunk_size=chunk_size,
+            on_step=on_step,
+            on_chunk=on_chunk,
+        )
     # PSNR assumes amplitudes are in [0, 1] (images) or roughly so (synthetics in [-1, 1]).
     # For [-1, 1] targets MSE→PSNR uses peak=2; we report peak=1 PSNR consistently and
     # note the convention. Sitzmann+ 2020 reports peak=1 PSNR on normalised images.
