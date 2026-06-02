@@ -48,7 +48,7 @@ class FINERLayer(Basis):
     scale_req_grad: bool = eqx.field(static=True)
 
     def __init__(self, in_dim, out_dim, omega_init, is_first, *, key, first_bias_scale=5.0, scale_req_grad=False):
-        """Initialise SIREN-style weights, then optionally overwrite the first-layer bias.
+        """Initialise SIREN-style weights, then optionally widen the first-layer bias.
 
         ``first_bias_scale`` is only consumed when ``is_first`` is True; it has
         no effect on hidden layers (which keep SIREN's ``sqrt(6/in)/omega``
@@ -56,16 +56,19 @@ class FINERLayer(Basis):
         magnitude-boost trick exclusively on the first layer so the
         downstream layers see a wide pre-activation distribution without
         themselves being initialised at high frequencies.
+
+        The wide-bias trick is applied by rescaling the SIREN-drawn ``b_siren``
+        rather than re-sampling from the input ``key``. The SIREN first-layer
+        bias is uniform on ``[-1/in_dim, +1/in_dim]``, so
+        ``b_siren * (first_bias_scale * in_dim)`` is the exact same uniform
+        distribution on ``[-first_bias_scale, +first_bias_scale]`` — no extra
+        ``jax.random.split`` and no risk of key reuse / cross-leaf correlation
+        from re-deriving a second key from one that ``siren_init`` already
+        consumed.
         """
         self.W, b_siren = siren_init(in_dim, out_dim, omega_init, is_first, key)
         if is_first:
-            # Re-draw the bias with the FINER paper's wider uniform bound.
-            # Using a separate key so the bias re-draw is reproducible from the
-            # input key alone (one extra split keeps it deterministic).
-            _, k_bias_override = jax.random.split(key)
-            self.b = jax.random.uniform(
-                k_bias_override, (out_dim,), minval=-float(first_bias_scale), maxval=float(first_bias_scale)
-            )
+            self.b = b_siren * (float(first_bias_scale) * in_dim)
         else:
             self.b = b_siren
         self.omega = jnp.array(float(omega_init))
