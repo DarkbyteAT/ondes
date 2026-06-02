@@ -39,24 +39,11 @@ class BasisChoice(StrEnum):
     StrEnum so CLI input is validated automatically and `--basis foo` prints
     a clean error instead of raising KeyError. Compares equal to plain strings
     (tests pass `basis="siren"`); enum members are str instances.
-
-    Per-basis hyperparameters beyond ``--omega`` and ``--s-init`` are NOT
-    exposed via CLI in this version — every additional basis uses its paper
-    defaults from the body ``__init__``. See each body class (`ondes.BACON`,
-    `ondes.FINER`, `ondes.PNF`, `ondes.RFF`, `ondes.FourierMFN`,
-    `ondes.GaborMFN`) for the defaults. A follow-up will expose per-basis
-    flags.
     """
 
     SIREN = "siren"
     HSIREN = "hsiren"
     WIRE = "wire"
-    FINER = "finer"
-    BACON = "bacon"
-    PNF = "pnf"
-    RFF = "rff"
-    FOURIER_MFN = "fourier-mfn"
-    GABOR_MFN = "gabor-mfn"
 
 
 class SyntheticChoice(StrEnum):
@@ -71,29 +58,6 @@ _BASIS_CLASSES = {
     BasisChoice.SIREN: ondes.SIREN,
     BasisChoice.HSIREN: ondes.HSIREN,
     BasisChoice.WIRE: ondes.WIRE,
-    BasisChoice.FINER: ondes.FINER,
-    BasisChoice.BACON: ondes.BACON,
-    BasisChoice.PNF: ondes.PNF,
-    BasisChoice.RFF: ondes.RFF,
-    BasisChoice.FOURIER_MFN: ondes.FourierMFN,
-    BasisChoice.GABOR_MFN: ondes.GaborMFN,
-}
-
-
-# Sets of basis kinds that share the same ω-init contract.
-# SIREN-family: `omega_first` + `omega_hidden` kwargs. FINER also uses these,
-# but with paper default omega_hidden=1.0 — passing omega_hidden=omega would
-# override that, so FINER is its own group (uses `omega_first` only).
-_OMEGA_FAMILY = {BasisChoice.SIREN, BasisChoice.HSIREN, BasisChoice.WIRE}
-# Bases with NO omega knob: BACON/PNF/FourierMFN/GaborMFN/RFF — each has its
-# own spectral-bandwidth knob (max_freq, input_scale, sigma) that's NOT mapped
-# to `--omega` to avoid silently misinterpreting the flag.
-_NO_OMEGA_BASES = {
-    BasisChoice.BACON,
-    BasisChoice.PNF,
-    BasisChoice.RFF,
-    BasisChoice.FOURIER_MFN,
-    BasisChoice.GABOR_MFN,
 }
 
 
@@ -123,44 +87,16 @@ def build_model(
     key,
     s_init: float | None = None,
 ):
-    """Construct the chosen basis body from the CLI's `--basis` flag.
+    """Construct one of {SIREN, HSIREN, WIRE} from the CLI's `--basis` flag.
 
     The string-to-class lookup is the *user-side* dispatch DECISIONS.md
     explicitly permits: ondes itself has no `kind=` discriminator; the CLI
     parses a string and picks the constructor.
 
-    ω routing:
-
-    - SIREN/HSIREN/WIRE: ``omega`` flows into both ``omega_first`` and
-      ``omega_hidden`` (the original Sitzmann+ 2020 convention).
-    - FINER: ``omega`` flows into ``omega_first`` only; the paper default
-      ``omega_hidden=1.0`` is preserved.
-    - BACON/PNF/FourierMFN/GaborMFN/RFF: no ω knob — they use ``max_freq`` /
-      ``input_scale`` / ``sigma`` instead. Passing a non-default ``omega``
-      with one of these bases raises because the flag has no destination.
-
-    ``s_init`` is WIRE-specific (the Gaussian-envelope width init). Passing
-    it with any other basis raises rather than silently dropping it.
-
-    For per-basis hyperparameters beyond ``omega`` / ``s_init`` (sigma for
-    RFF, alpha/beta for GaborMFN, max_freq for BACON, etc.) this script uses
-    the paper defaults from each body's ``__init__``. A follow-up will
-    expose them as CLI flags.
+    ``s_init`` is forwarded only to ``WIRE`` — SIREN/HSIREN don't accept it.
+    Passing it for non-WIRE bases is silently ignored rather than raising,
+    so a single CLI invocation can sweep basis without per-basis arg gymnastics.
     """
-    # Reject WIRE-specific s_init when basis is not WIRE.
-    if s_init is not None and basis != BasisChoice.WIRE:
-        raise ValueError(f"--s-init is WIRE-specific; got --basis {basis}.")
-
-    # Reject ω override on bases that have no ω knob. The CLI default 30.0
-    # passes through (the user didn't ask for anything specific); explicit
-    # non-default values are the trigger.
-    _OMEGA_DEFAULT = 30.0
-    if basis in _NO_OMEGA_BASES and omega != _OMEGA_DEFAULT:
-        raise ValueError(
-            f"--omega is a SIREN/HSIREN/WIRE/FINER knob and is ignored by --basis {basis}. "
-            f"Drop --omega from the invocation, or pick a basis with an ω init."
-        )
-
     cls = _BASIS_CLASSES[basis]
     # ω=30 — Sitzmann+ 2020 default for natural images. WIRE (Saragadam+ 2023)
     # uses ω=10 with σ=10 for natural images; pass --omega 10 --s-init 10
@@ -169,19 +105,10 @@ def build_model(
         in_dim=in_dim,
         hidden_dim=hidden,
         num_hidden_layers=layers,
+        omega_first=omega,
+        omega_hidden=omega,
         key=key,
     )
-    if basis in _OMEGA_FAMILY:
-        kwargs["omega_first"] = omega
-        kwargs["omega_hidden"] = omega
-    elif basis == BasisChoice.FINER:
-        # FINER uses omega_first only — its paper default omega_hidden=1.0
-        # is preserved (overriding it would change the magnitude-gating regime
-        # the paper studies).
-        kwargs["omega_first"] = omega
-    # else: no-omega family — kwargs already complete, basis __init__ applies
-    # its paper-default spectral-bandwidth knob.
-
     if basis == BasisChoice.WIRE and s_init is not None:
         kwargs["s_init"] = s_init
     inr = cls(**kwargs)
