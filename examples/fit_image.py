@@ -182,11 +182,12 @@ def train(
     balances on_chunk artifact freshness against per-chunk dispatch
     overhead.
 
-    Raises `ValueError` if `steps` is not divisible by `chunk_size` —
-    silent under-training would otherwise mislabel the final post-loop
-    step entry (we'd train `(steps // chunk_size) * chunk_size` Adam
-    steps but emit `on_step(steps, final_loss)` claiming the original
-    `steps` count).
+    Raises `ValueError` if ``steps <= 0`` (a zero-step request would emit
+    the post-loop ``on_step(steps, final_loss)`` as a duplicate of the
+    step-0 seed) or if ``steps`` is not divisible by ``chunk_size``
+    (silent under-training would mislabel the final post-loop step entry:
+    we'd train ``(steps // chunk_size) * chunk_size`` Adam steps but emit
+    ``on_step(steps, final_loss)`` claiming the original ``steps`` count).
 
     Step-label convention: the scan body computes ``loss`` *before*
     ``apply_updates``, so ``losses[j]`` is the loss at the *pre-update*
@@ -200,6 +201,8 @@ def train(
     (``steps + 1``) — every label now points at the matching parameter
     state.
     """
+    if steps <= 0:
+        raise ValueError(f"steps must be positive, got {steps}")
     if steps % chunk_size != 0:
         raise ValueError(f"steps ({steps}) must be a multiple of chunk_size ({chunk_size})")
     optimiser = optax.adam(lr)
@@ -226,7 +229,11 @@ def train(
     # "how much did training even help?" baseline.
     if on_step is not None:
         on_step(0, initial_loss)
-    n_chunks = max(1, steps // chunk_size)
+    # Both preconditions above guarantee steps >= chunk_size with steps a
+    # positive multiple of chunk_size, so the floor-div is correct without
+    # a max-clamp — the clamp would have hidden a `steps=0` request behind
+    # a silent one-chunk run.
+    n_chunks = steps // chunk_size
     for i in range(n_chunks):
         (model, opt_state), losses = run_chunk(model, opt_state, coords, target)
         # Materialise the chunk's per-step losses once and feed them to on_step.
