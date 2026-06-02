@@ -9,7 +9,12 @@ build/
 .pytest_cache/
 .ruff_cache/
 .pyright/
+.venv-mps/
 .worktrees/
+
+# Per-run training artifacts (see examples/fit_image.py — runs/<timestamp>/).
+# Reproducible from CLI + config.json; not source.
+runs/
 
 # Claude Code ephemeral state
 .claude/worktrees/
