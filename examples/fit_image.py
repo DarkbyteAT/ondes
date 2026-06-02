@@ -446,15 +446,21 @@ def _train_and_save(
         def on_step(step: int, loss: float) -> None:
             # Per-step, fires from Python after each chunk's losses come back
             # from scan. Stay cheap: CSV append + history list + occasional
-            # console print. Matplotlib lives in on_chunk because rendering
-            # blocks the JAX thread.
+            # console print + log-cadence flush. Matplotlib lives in on_chunk
+            # because rendering blocks the JAX thread.
             psnr = -10.0 * np.log10(max(loss, 1e-12))
             history.append((step, loss))
             csv_writer.writerow([step, f"{loss:.6g}", f"{psnr:.4f}"])
-            csv_file.flush()
-            # Always log step 0 (the baseline) and step `steps` (the end); otherwise
-            # gate to every `log_every` steps to avoid stdout flood at 2500 steps.
+            # Flush + console echo share the same `log_every` gate. The
+            # per-step CSV row is written every iteration (so the file is
+            # complete on a clean exit), but fsync happens on the same
+            # cadence the user sees the console heartbeat — `tail -f` and
+            # stdout stay in lockstep, and we drop ~99% of the per-step
+            # fsyncs that the unconditional flush used to do. The CSV
+            # handle's own `with`-managed close still flushes at exit, so
+            # nothing is lost on the final partial cadence.
             if step == 0 or step == steps or step % log_every == 0:
+                csv_file.flush()
                 typer.echo(f"  step {step:>6d}  loss {loss:.6g}  PSNR {psnr:.2f} dB")
 
         def on_chunk(*, step: int, loss: float, model) -> None:
