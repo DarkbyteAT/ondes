@@ -23,7 +23,7 @@ ENCODING_CLASSES = (Identity, Gaussian, LearnedGaussian, Dyadic)
 def _build_encoding(cls, *, rank=3, num_freqs=8, num_bands=4, sigma=2.5, key=None):
     """Construct an encoding of any kind with sensible defaults for tests."""
     if key is None:
-        key = jax.random.PRNGKey(0)
+        key = jax.random.key(0)
     if cls is Identity:
         return Identity(in_dim=rank)
     if cls is Gaussian:
@@ -50,7 +50,7 @@ def test_gaussian_forward_shape_and_finiteness():
     # Given: a Gaussian encoding with rank=3, num_freqs=8, sigma=2.5
     # When: encoding a coord
     # Then: output shape is (2 * num_freqs,) and values are finite
-    enc = Gaussian(rank=3, num_freqs=8, sigma=2.5, key=jax.random.PRNGKey(0))
+    enc = Gaussian(rank=3, num_freqs=8, sigma=2.5, key=jax.random.key(0))
     coord = jnp.array([0.1, 0.2, 0.3])
     out = enc(coord)
     assert enc.out_dim == 16
@@ -67,7 +67,7 @@ def test_gaussian_sigma_is_folded_into_B():
     # "fold sigma into B" choice (you can't recover the construction-time
     # sigma scalar afterwards, only the empirical std).
     sigma = 10.0
-    enc = Gaussian(rank=4, num_freqs=128, sigma=sigma, key=jax.random.PRNGKey(0))
+    enc = Gaussian(rank=4, num_freqs=128, sigma=sigma, key=jax.random.key(0))
     # N(0, sigma^2) ⇒ empirical std ≈ sigma
     assert abs(float(jnp.std(enc.B)) - sigma) < sigma * 0.2
 
@@ -76,7 +76,7 @@ def test_learned_gaussian_forward_shape_and_finiteness():
     # Given: a LearnedGaussian encoding
     # When: encoding a coord
     # Then: output shape is (2 * num_freqs,), values are finite, sigma is a scalar
-    enc = LearnedGaussian(rank=3, num_freqs=8, key=jax.random.PRNGKey(0))
+    enc = LearnedGaussian(rank=3, num_freqs=8, key=jax.random.key(0))
     coord = jnp.array([0.1, 0.2, 0.3])
     out = enc(coord)
     assert enc.out_dim == 16
@@ -91,7 +91,7 @@ def test_learned_gaussian_defaults_sigma_to_pi():
     # Then: sigma equals pi to float32 precision (matches the prior
     # gaussian_learn factory default; LearnedGaussian materialises sigma as a
     # jnp array, which truncates to float32 by default).
-    enc = LearnedGaussian(rank=2, num_freqs=4, key=jax.random.PRNGKey(0))
+    enc = LearnedGaussian(rank=2, num_freqs=4, key=jax.random.key(0))
     assert math.isclose(float(enc.sigma), math.pi, rel_tol=1e-6)
 
 
@@ -99,7 +99,7 @@ def test_learned_gaussian_custom_sigma_init():
     # Given: LearnedGaussian with custom sigma_init
     # When: inspecting sigma
     # Then: sigma is the value passed in
-    enc = LearnedGaussian(rank=2, num_freqs=4, key=jax.random.PRNGKey(0), sigma_init=4.0)
+    enc = LearnedGaussian(rank=2, num_freqs=4, key=jax.random.key(0), sigma_init=4.0)
     assert float(enc.sigma) == 4.0
 
 
@@ -111,7 +111,7 @@ def test_learned_gaussian_sigma_is_in_pytree_gaussian_is_not():
     # load-bearing structural invariant: LearnedGaussian's sigma is in the
     # pytree so optimisers can update it; Gaussian's spectral scale is frozen
     # at construction.
-    key = jax.random.PRNGKey(0)
+    key = jax.random.key(0)
     gauss = Gaussian(rank=3, num_freqs=4, sigma=2.5, key=key)
     learned = LearnedGaussian(rank=3, num_freqs=4, key=key)
     gauss_arrays, _ = eqx.partition(gauss, eqx.is_array)
@@ -198,8 +198,8 @@ def test_encoding_classes_are_disjoint_types():
     # accidentally collapse into one.
     encs = [
         Identity(in_dim=3),
-        Gaussian(rank=3, num_freqs=4, sigma=1.0, key=jax.random.PRNGKey(0)),
-        LearnedGaussian(rank=3, num_freqs=4, key=jax.random.PRNGKey(0)),
+        Gaussian(rank=3, num_freqs=4, sigma=1.0, key=jax.random.key(0)),
+        LearnedGaussian(rank=3, num_freqs=4, key=jax.random.key(0)),
         Dyadic(rank=3),
     ]
     classes = {type(e) for e in encs}
@@ -246,6 +246,6 @@ def test_nyquist_sigma_composes_with_gaussian():
     # apply when building one encoding per weight tensor).
     weight_shape = (32, 1024)
     sigma = nyquist_sigma(weight_shape)
-    enc = Gaussian(rank=3, num_freqs=256, sigma=sigma, key=jax.random.PRNGKey(0))
+    enc = Gaussian(rank=3, num_freqs=256, sigma=sigma, key=jax.random.key(0))
     # Empirical std ≈ sigma to within ~20% on this sample size
     assert abs(float(jnp.std(enc.B)) - sigma) < sigma * 0.2
