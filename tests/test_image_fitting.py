@@ -105,3 +105,24 @@ def test_train_on_step_labels_match_parameter_state():
         f"expected step0 > step1 > step2 (descending training), "
         f"got step0={step0_loss}, step1={step1_loss}, step2={step2_loss}"
     )
+
+
+def test_train_rejects_steps_not_divisible_by_chunk_size():
+    # Given: a tiny model and a request for 250 steps in chunks of 100.
+    # The scan loop would run (steps // chunk_size) * chunk_size = 200 Adam
+    # steps and then emit on_step(steps=250, final_loss), mislabelling the
+    # actual post-training state. The precondition check inside train() must
+    # fail-fast with a clear error rather than silently under-train.
+    coords, target = synthetic_target("sinusoid", grid_n=8)
+    key = jax.random.key(0)
+    model = Model(
+        inr=ondes.SIREN(in_dim=2, hidden_dim=8, num_hidden_layers=2, omega_first=30.0, omega_hidden=30.0, key=key)
+    )
+
+    # When/Then: the call raises ValueError with a message naming both numbers.
+    with pytest.raises(ValueError, match=r"250.*100") as excinfo:
+        train(model, coords, target, steps=250, lr=1e-3, chunk_size=100)
+    # Sanity-check the message carries both values explicitly (so the user
+    # sees what they passed, not a generic "bad arguments").
+    msg = str(excinfo.value)
+    assert "250" in msg and "100" in msg, f"expected both 250 and 100 in error message, got: {msg!r}"

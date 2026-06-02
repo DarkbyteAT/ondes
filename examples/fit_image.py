@@ -178,10 +178,15 @@ def train(
       belong here.
 
     The scan runs `chunk_size` steps as one XLA executable; the outer loop
-    invokes it `(steps // chunk_size)` times. A remainder is silently dropped
-    to keep the JIT cache stable (a final smaller chunk would recompile).
-    Default `chunk_size=100` balances on_chunk artifact freshness against
-    per-chunk dispatch overhead.
+    invokes it `(steps // chunk_size)` times. Default `chunk_size=100`
+    balances on_chunk artifact freshness against per-chunk dispatch
+    overhead.
+
+    Raises `ValueError` if `steps` is not divisible by `chunk_size` —
+    silent under-training would otherwise mislabel the final post-loop
+    step entry (we'd train `(steps // chunk_size) * chunk_size` Adam
+    steps but emit `on_step(steps, final_loss)` claiming the original
+    `steps` count).
 
     Step-label convention: the scan body computes ``loss`` *before*
     ``apply_updates``, so ``losses[j]`` is the loss at the *pre-update*
@@ -195,6 +200,8 @@ def train(
     (``steps + 1``) — every label now points at the matching parameter
     state.
     """
+    if steps % chunk_size != 0:
+        raise ValueError(f"steps ({steps}) must be a multiple of chunk_size ({chunk_size})")
     optimiser = optax.adam(lr)
     opt_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
     jitted_loss = eqx.filter_jit(loss_fn)
