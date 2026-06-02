@@ -14,7 +14,7 @@ def test_rff_layer_is_basis_subclass():
     # When: checking the inheritance contract
     # Then: it's a Basis (the polymorphism contract — downstream code can
     # express "any basis layer" as Basis in a single type signature).
-    layer = RFFLayer(8, 16, key=jax.random.PRNGKey(0))
+    layer = RFFLayer(8, 16, key=jax.random.key(0))
     assert isinstance(layer, Basis)
 
 
@@ -22,7 +22,7 @@ def test_rff_layer_forward_is_relu():
     # Given: an RFFLayer and a pre-activation with both signs
     # When: calling _activate directly
     # Then: it matches plain ReLU exactly (RFF uses no scaling).
-    layer = RFFLayer(2, 4, key=jax.random.PRNGKey(0))
+    layer = RFFLayer(2, 4, key=jax.random.key(0))
     pre = jnp.array([-1.0, -0.5, 0.0, 0.5, 1.0])
     assert jnp.allclose(layer._activate(pre), jax.nn.relu(pre))
 
@@ -32,7 +32,7 @@ def test_rff_layer_omega_is_unit_placeholder():
     # When: inspecting the omega leaf
     # Then: it's a unit scalar so the leaf still exists for pytree parity with
     # the SIREN family, but its value doesn't influence the forward pass.
-    layer = RFFLayer(2, 4, key=jax.random.PRNGKey(0))
+    layer = RFFLayer(2, 4, key=jax.random.key(0))
     assert layer.omega.shape == ()
     assert float(layer.omega) == 1.0
 
@@ -41,7 +41,7 @@ def test_rff_body_is_basis_module():
     # Given: an RFF body
     # When: checking the structural and nominal type contracts
     # Then: it conforms to both BasisModule (Protocol) and Body (concrete base).
-    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.PRNGKey(0))
+    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.key(0))
     assert isinstance(body, BasisModule)
     assert isinstance(body, Body)
 
@@ -56,7 +56,7 @@ def test_rff_body_b_matrix_shape_and_scale():
         in_dim=in_dim,
         hidden_dim=8,
         num_hidden_layers=1,
-        key=jax.random.PRNGKey(0),
+        key=jax.random.key(0),
         num_freqs=num_freqs,
         sigma=sigma,
     )
@@ -70,7 +70,7 @@ def test_rff_body_forward_scalar_shape():
     # Given: a default-out (scalar) RFF body and a coordinate
     # When: forward-passing
     # Then: output is a 0-d scalar
-    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.PRNGKey(1))
+    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.key(1))
     y = body(jnp.array([0.1, -0.2]))
     assert y.shape == ()
 
@@ -79,7 +79,7 @@ def test_rff_body_forward_vector_shape():
     # Given: an out_features=4 RFF body
     # When: forward-passing
     # Then: output is shape (4,)
-    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.PRNGKey(2), out_features=4)
+    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.key(2), out_features=4)
     y = body(jnp.array([0.1, -0.2]))
     assert y.shape == (4,)
 
@@ -89,7 +89,7 @@ def test_rff_body_trunk_returns_hidden_features():
     # When: calling trunk()
     # Then: shape is (hidden_dim,) — the encoding adds an internal layer 0
     # but the trunk output is the final hidden activation.
-    body = RFF(in_dim=2, hidden_dim=32, num_hidden_layers=3, key=jax.random.PRNGKey(3))
+    body = RFF(in_dim=2, hidden_dim=32, num_hidden_layers=3, key=jax.random.key(3))
     h = body.trunk(jnp.array([0.25, -0.5]))
     assert h.shape == (32,)
 
@@ -100,7 +100,7 @@ def test_rff_body_film_modulation_changes_output():
     # Then: outputs differ (modulation is wired through the MLP layers, not the
     # encoding — but at least one MLP layer sees it, so the output must change).
     in_dim, hidden_dim, num_layers = 2, 8, 2
-    body = RFF(in_dim=in_dim, hidden_dim=hidden_dim, num_hidden_layers=num_layers, key=jax.random.PRNGKey(4))
+    body = RFF(in_dim=in_dim, hidden_dim=hidden_dim, num_hidden_layers=num_layers, key=jax.random.key(4))
     coord = jnp.array([0.3, -0.7])
     film = jnp.ones((num_layers, 2 * hidden_dim)) * 0.5
     plain = body(coord)
@@ -112,7 +112,7 @@ def test_rff_body_canonicalises_out_features_one_to_none():
     # Given: two RFF bodies with out_features=None and out_features=1
     # When: comparing their pytree structures
     # Then: identical (the canonicalisation rule applies uniformly across bases)
-    key = jax.random.PRNGKey(0)
+    key = jax.random.key(0)
     a = RFF(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=key, out_features=None)
     b = RFF(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=key, out_features=1)
     assert jax.tree_util.tree_structure(a) == jax.tree_util.tree_structure(b)
@@ -124,7 +124,7 @@ def test_rff_body_jit_matches_eager():
     # Given: an RFF body and a coordinate
     # When: jit-compiling the call
     # Then: jitted output matches eager
-    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.PRNGKey(5))
+    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.key(5))
     coord = jnp.array([0.1, -0.2])
     eager = body(coord)
     jitted = eqx.filter_jit(body)(coord)
@@ -136,7 +136,7 @@ def test_rff_body_grad_is_finite_and_nonzero():
     # When: taking grad of a sum-loss through the body
     # Then: gradients exist, are finite, and at least one carries signal —
     # full-zero gradient would mean broken plumbing through the encoding or MLP.
-    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.PRNGKey(6))
+    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.key(6))
     coord = jnp.array([0.3, -0.4])
 
     def loss(b, c):
@@ -154,8 +154,8 @@ def test_rff_body_vmap_over_coords():
     # Given: a batch of coordinates and an RFF body
     # When: vmapping the call
     # Then: output has the batch shape
-    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.PRNGKey(7))
-    coords = jax.random.uniform(jax.random.PRNGKey(70), (7, 2), minval=-1.0, maxval=1.0)
+    body = RFF(in_dim=2, hidden_dim=16, num_hidden_layers=2, key=jax.random.key(7))
+    coords = jax.random.uniform(jax.random.key(70), (7, 2), minval=-1.0, maxval=1.0)
     out = jax.vmap(body)(coords)
     assert out.shape == (7,)
 
@@ -167,7 +167,7 @@ def test_rff_body_rejects_zero_hidden_layers(out_features):
     # Then: constructor rejects — the readout shape contract requires at least
     # one hidden layer to feed it.
     with pytest.raises(AssertionError):
-        RFF(in_dim=2, hidden_dim=8, num_hidden_layers=0, key=jax.random.PRNGKey(0), out_features=out_features)
+        RFF(in_dim=2, hidden_dim=8, num_hidden_layers=0, key=jax.random.key(0), out_features=out_features)
 
 
 def test_rff_fix_encoding_mask_isolates_B_matrix():
@@ -177,7 +177,7 @@ def test_rff_fix_encoding_mask_isolates_B_matrix():
     # has a non-array placeholder there. The mask is load-bearing: users pass
     # it to optax.masked / eqx.partition to keep `B` frozen, matching the
     # Gaussian-RFF paper's "draw once and freeze" convention.
-    body = RFF(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.PRNGKey(7), num_freqs=16)
+    body = RFF(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.key(7), num_freqs=16)
     mask = body.fix_encoding_mask()
     learnable, fixed = eqx.partition(body, mask)
 
@@ -193,7 +193,7 @@ def test_rff_body_layer_pytree_homogeneous():
     # the coord dim from the MLP input dim, so post-encoding layers can scan
     # whenever encoded_dim == hidden_dim. Pytree homogeneity is independent
     # of array shape — this test asserts the static-fields contract.
-    body = RFF(in_dim=2, hidden_dim=64, num_hidden_layers=4, key=jax.random.PRNGKey(0), num_freqs=32)
+    body = RFF(in_dim=2, hidden_dim=64, num_hidden_layers=4, key=jax.random.key(0), num_freqs=32)
     ref = jax.tree_util.tree_structure(body.layers[0])
     for layer in body.layers:
         assert jax.tree_util.tree_structure(layer) == ref
