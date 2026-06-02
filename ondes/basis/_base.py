@@ -149,6 +149,24 @@ class Body(eqx.Module):
     hidden_dim: int = eqx.field(static=True)
     num_hidden_layers: int = eqx.field(static=True)
 
+    def _check_film_shape(self, film) -> None:
+        """Raise ``ValueError`` if ``film`` doesn't match the expected shape.
+
+        Expected shape is ``(num_hidden_layers, 2 * hidden_dim)`` — the first
+        half of the trailing axis is ``gamma``, the second half is ``beta``.
+        Called at the top of every concrete ``trunk`` implementation so the
+        FiLM contract has one source of truth across the basis family
+        (``Body.trunk`` for SIREN/HSIREN/WIRE, plus the MFN/PNF/BACON/RFF
+        overrides). ``ValueError`` rather than ``assert`` because the shape
+        contract is part of the user-facing API and must survive
+        ``python -O`` (asserts get stripped under optimisation).
+        """
+        if film is None:
+            return
+        expected = (self.num_hidden_layers, 2 * self.hidden_dim)
+        if film.shape != expected:
+            raise ValueError(f"film must have shape {expected}, got {film.shape}")
+
     def trunk(self, coord, *, film=None):
         """Return pre-readout hidden features.
 
@@ -161,6 +179,7 @@ class Body(eqx.Module):
         Returns:
             Activations of the final hidden layer, shape ``(hidden_dim,)``.
         """
+        self._check_film_shape(film)
         h = coord
         for i, layer in enumerate(self.layers):
             if film is not None:

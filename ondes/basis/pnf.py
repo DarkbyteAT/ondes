@@ -136,6 +136,7 @@ class PNF(Body):
         downstream-extension hook, not in the paper; bias-free mix is
         preserved by leaving ``beta=0`` in the FiLM tensor.
         """
+        self._check_film_shape(film)
         z = self.filters[0](coord)
         for i in range(self.num_hidden_layers):
             pre = self.mix_W[i] @ z

@@ -145,6 +145,7 @@ class RFF(Body):
         deterministic feature map, not a layer with linear weights and bias
         that FiLM would gate).
         """
+        self._check_film_shape(film)
         h = self._encode(coord)
         for i, layer in enumerate(self.layers):
             if film is not None:

@@ -146,6 +146,7 @@ class _MFNBody(Body):
         to gate — which mirrors the SIREN/H-SIREN/WIRE convention of FiLM
         being a per-hidden-layer gate.
         """
+        self._check_film_shape(film)
         z = self.filters[0](coord)
         for i in range(self.num_hidden_layers):
             pre = self.recurrence_W[i] @ z + self.recurrence_b[i]
