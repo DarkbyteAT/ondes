@@ -160,9 +160,11 @@ def test_bacon_body_grad_is_finite_and_nonzero():
 def test_bacon_fix_filters_mask_isolates_filter_weights():
     # Given: a BACON body and its fix-filters mask
     # When: partitioning the body
-    # Then: the "fixed" half contains exactly the filter.W arrays and nothing
-    # else. The mask is load-bearing: users pass it to optax.masked to keep
-    # filter frequencies non-trainable (the band-limit proof depends on it).
+    # Then: the "fixed" half contains the filter.W arrays *and* the body-level
+    # `bandwidths` cap array. The mask is load-bearing: users pass it to
+    # optax.masked to keep filter frequencies non-trainable (the band-limit
+    # proof depends on it) and to avoid Adam allocating momentum state for the
+    # constant `bandwidths` diagnostic.
     body = BACON(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.PRNGKey(7))
     mask = body.fix_filters_mask()
     learnable, fixed = eqx.partition(body, mask)
@@ -172,6 +174,10 @@ def test_bacon_fix_filters_mask_isolates_filter_weights():
         assert eqx.is_array(f.W)
         # And the learnable half should contain a None / non-array placeholder there.
         assert not eqx.is_array(learnable.filters[i].W)
+
+    # `bandwidths` is a constant diagnostic, not a trainable param.
+    assert eqx.is_array(fixed.bandwidths)
+    assert not eqx.is_array(learnable.bandwidths)
 
 
 def test_bacon_body_vmap_over_coords():

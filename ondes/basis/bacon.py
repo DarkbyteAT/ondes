@@ -190,18 +190,29 @@ class BACON(Body):
         return jnp.sum(self.bandwidths)
 
     def fix_filters_mask(self):
-        """Return a pytree mask that selects only the learnable (non-filter-W) leaves.
+        """Return a pytree mask that selects only the learnable leaves.
 
         Use with ``eqx.partition(body, body.fix_filters_mask())`` to split the
         body into ``(learnable, fixed)`` halves before applying an optimiser
-        update — the fixed half (filter frequencies) must not receive
-        gradient steps for the analytic bandwidth proof to hold.
+        update — the fixed half must not receive gradient steps for the
+        analytic bandwidth proof to hold.
+
+        Two kinds of leaves end up in the fixed half:
+
+        - Each filter's ``W`` (the discrete-grid frequencies). Required by the
+          analytic bandwidth proof.
+        - The body-level ``bandwidths`` array (the per-filter cap diagnostic).
+          Not a learnable parameter — it's a constant carried alongside the
+          filter weights so the analytic cap is recoverable from the body
+          alone. Marked ``False`` here so an Adam-style optimiser doesn't
+          allocate momentum / second-moment state for it.
         """
-        # Start from "everything is learnable", then zero out filter Ws.
+        # Start from "everything is learnable", then zero out filter Ws and bandwidths.
         mask = jax.tree_util.tree_map(lambda x: eqx.is_array(x), self)
         # Walk filters: each filter's W is fixed, its b is learnable.
         new_filters = tuple(eqx.tree_at(lambda f: f.W, m, False) for m in mask.filters)
-        return eqx.tree_at(lambda b: b.filters, mask, new_filters)
+        mask = eqx.tree_at(lambda b: b.filters, mask, new_filters)
+        return eqx.tree_at(lambda b: b.bandwidths, mask, False)
 
     def trunk(self, coord, *, film=None):
         """BACON multiplicative recurrence — identical shape to MFN's.
