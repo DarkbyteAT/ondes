@@ -2,17 +2,29 @@
 
 A minimal end-to-end demo of the (trunk, head) composition pattern from the
 README: build an ondes basis body, wrap it in a small `eqx.Module`, train with
-optax. Run with zero args for a synthetic-sinusoid smoke fit:
+optax. One Typer subcommand per basis — each owns the kwargs that *that*
+basis takes, no shared discriminator. Pick a subcommand to pick a basis:
 
-    uv run python examples/fit_image.py
+    uv run python examples/fit_image.py synthetic --target sinusoid    # SIREN smoke fit
+    uv run python examples/fit_image.py siren --image cat.png --steps 2000 --grid 64
+    uv run python examples/fit_image.py wire --image cat.png --omega 10 --s-init 10
+    uv run python examples/fit_image.py rff  --image cat.png --sigma 10 --num-freqs 256
+    uv run python examples/fit_image.py bacon --image cat.png --max-freq 256
+    uv run python examples/fit_image.py finer --image cat.png
+    uv run python examples/fit_image.py fourier-mfn --image cat.png
+    uv run python examples/fit_image.py gabor-mfn   --image cat.png
+    uv run python examples/fit_image.py pnf         --image cat.png
 
-Or fit a real image:
-
-    uv run python examples/fit_image.py --image cat.png --steps 2000 --grid 64
+The subcommand layout mirrors `ondes`'s public surface: every basis is its
+own class with its own constructor kwargs, never a `kind=` string or shared
+dict-of-classes (see DECISIONS.md §"Structural design — polymorphism over
+discriminators"). The CLI follows the library's discipline so the example
+doesn't model a pattern the library refuses to ship.
 """
 
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -25,25 +37,7 @@ from PIL import Image
 import ondes
 
 
-app = typer.Typer(add_completion=False)
-
-
-# Adam(1e-3) — Sitzmann+ 2020 uses 5e-5 for natural images; 1e-3 works for the
-# small synthetic targets in this demo (256-1024 pixels, 200-500 steps).
-# Switch to 5e-5 + ~5k steps when fitting megapixel natural images.
-
-
-class BasisChoice(StrEnum):
-    """Typer-friendly basis-kind choice.
-
-    StrEnum so CLI input is validated automatically and `--basis foo` prints
-    a clean error instead of raising KeyError. Compares equal to plain strings
-    (tests pass `basis="siren"`); enum members are str instances.
-    """
-
-    SIREN = "siren"
-    HSIREN = "hsiren"
-    WIRE = "wire"
+app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
 class SyntheticChoice(StrEnum):
@@ -52,13 +46,6 @@ class SyntheticChoice(StrEnum):
     SINUSOID = "sinusoid"
     GAUSSIAN_BUMP = "gaussian_bump"
     MANDELBROT = "mandelbrot"
-
-
-_BASIS_CLASSES = {
-    BasisChoice.SIREN: ondes.SIREN,
-    BasisChoice.HSIREN: ondes.HSIREN,
-    BasisChoice.WIRE: ondes.WIRE,
-}
 
 
 class Model(eqx.Module):
@@ -75,44 +62,6 @@ class Model(eqx.Module):
     def __call__(self, coord):
         """Forward pass: coord-of-shape-`(in_dim,)` → scalar amplitude."""
         return self.inr(coord)
-
-
-def build_model(
-    basis: BasisChoice,
-    in_dim: int,
-    hidden: int,
-    layers: int,
-    omega: float,
-    *,
-    key,
-    s_init: float | None = None,
-):
-    """Construct one of {SIREN, HSIREN, WIRE} from the CLI's `--basis` flag.
-
-    The string-to-class lookup is the *user-side* dispatch DECISIONS.md
-    explicitly permits: ondes itself has no `kind=` discriminator; the CLI
-    parses a string and picks the constructor.
-
-    ``s_init`` is forwarded only to ``WIRE`` — SIREN/HSIREN don't accept it.
-    Passing it for non-WIRE bases is silently ignored rather than raising,
-    so a single CLI invocation can sweep basis without per-basis arg gymnastics.
-    """
-    cls = _BASIS_CLASSES[basis]
-    # ω=30 — Sitzmann+ 2020 default for natural images. WIRE (Saragadam+ 2023)
-    # uses ω=10 with σ=10 for natural images; pass --omega 10 --s-init 10
-    # --basis wire to reproduce. H-SIREN (Cai & Pan 2024) uses ω=30 unchanged.
-    kwargs = dict(
-        in_dim=in_dim,
-        hidden_dim=hidden,
-        num_hidden_layers=layers,
-        omega_first=omega,
-        omega_hidden=omega,
-        key=key,
-    )
-    if basis == BasisChoice.WIRE and s_init is not None:
-        kwargs["s_init"] = s_init
-    inr = cls(**kwargs)
-    return Model(inr=inr)
 
 
 def make_coords(*axes_sizes: int):
@@ -397,56 +346,45 @@ def _write_loss_curve(history: list[tuple[int, float]], path: Path, *, title: st
     plt.close(fig)
 
 
-@app.command()
-def main(
-    image: Path | None = typer.Option(
-        None,
-        help="Path to image; if omitted, use --synthetic.",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-    ),
-    synthetic: SyntheticChoice = typer.Option(SyntheticChoice.SINUSOID, help="Named synthetic target."),
-    basis: BasisChoice = typer.Option(BasisChoice.SIREN, help="Basis kind."),
-    hidden: int = typer.Option(64, help="Hidden dim."),
-    layers: int = typer.Option(3, help="Number of hidden layers."),
-    omega: float = typer.Option(30.0, help="ω init for both first and hidden layers."),
-    s_init: float | None = typer.Option(
-        None,
-        "--s-init",
-        help="WIRE-only: Gaussian envelope width init (paper σ=10 for natural images). Ignored for SIREN/HSIREN.",
-    ),
-    steps: int = typer.Option(500, help="Training steps."),
-    lr: float = typer.Option(
-        5e-4,
-        help="Adam learning rate. SIREN image-fit regime per Sitzmann+ 2020 is "
-        "1e-4 to 5e-4; small synthetic targets tolerate 1e-3.",
-    ),
-    grid: int = typer.Option(32, help="Grid resolution (synthetic) / resize target (image)."),
-    output_dir: Path | None = typer.Option(
-        None,
-        help="Run directory for artifacts (config, loss curve, recon snapshots, csv). "
-        "Defaults to `runs/{ISO-timestamp}/`.",
-    ),
-    chunk_size: int = typer.Option(
-        100,
-        help="Adam steps per JIT'd scan chunk. Sets the matplotlib re-render cadence "
-        "(loss CSV updates per step via io_callback regardless). "
-        "Total steps run = (steps // chunk_size) * chunk_size.",
-    ),
-    snapshot_every: int = typer.Option(
-        1,
-        help="Write a recon snapshot every N chunks (default 1 → every chunk; "
-        "with chunk_size=100 and steps=2500, ~25 frames in the evolution GIF).",
-    ),
-    log_every: int = typer.Option(
-        10,
-        help="Console-print loss every N steps. CSV gets every step regardless.",
-    ),
-    seed: int = typer.Option(0, help="PRNG seed."),
-):
-    """Fit an image with an ondes INR and stream loss/recon artifacts to a run dir."""
+def _train_and_save(
+    *,
+    model: Model,
+    basis_label: str,
+    image: Path | None,
+    synthetic_choice: SyntheticChoice | None,
+    in_dim: int,
+    coords,
+    target,
+    hidden: int,
+    layers: int,
+    steps: int,
+    lr: float,
+    grid: int,
+    chunk_size: int,
+    snapshot_every: int,
+    log_every: int,
+    output_dir: Path | None,
+    seed: int,
+    basis_extras: dict[str, Any],
+) -> None:
+    """Run the training loop and write all per-run artifacts to ``output_dir``.
+
+    Shared body of every per-basis subcommand. Owns:
+
+    - run-directory resolution (timestamped default under ``runs/``)
+    - input PNG dump (so each run dir is self-contained)
+    - ``config.json`` (every knob that affected the run, including the
+      basis-specific ``basis_extras`` so the run is reproducible from the
+      file alone)
+    - the with-managed CSV handle + per-step / per-chunk callbacks
+    - snapshot PNGs + cumulative evolution GIF + final loss SVG
+    - the end-of-run reconstruction PNG and console summary
+
+    Each subcommand constructs its `Model` from the basis kwargs that
+    *that basis* takes, then passes the coords/target plus all artifact
+    knobs here. The helper has no awareness of which basis was picked
+    beyond ``basis_label`` (used in the loss-curve title and config.json).
+    """
     import csv
     import json
     from datetime import UTC, datetime
@@ -457,14 +395,6 @@ def main(
         output_dir = Path("runs") / ts
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    key = jax.random.key(seed)
-    if image is not None:
-        coords, target = load_image(image, grid)
-        in_dim = int(coords.shape[-1])
-    else:
-        coords, target = synthetic_target(synthetic, grid)
-        in_dim = 2
-
     # Save input alongside outputs so each run dir is self-contained — no need
     # to remember which photo produced which reconstruction.
     if in_dim == 2:
@@ -474,14 +404,12 @@ def main(
     Image.fromarray(_to_uint8_image(input_arr, target)).save(output_dir / "input.png")
 
     # Config — every CLI knob that affects the run. Reproducibility hook.
-    config = {
+    config: dict[str, Any] = {
+        "basis": basis_label,
         "image": str(image) if image is not None else None,
-        "synthetic": str(synthetic) if image is None else None,
-        "basis": str(basis),
+        "synthetic": str(synthetic_choice) if synthetic_choice is not None else None,
         "hidden": hidden,
         "layers": layers,
-        "omega": omega,
-        "s_init": s_init,
         "steps": steps,
         "lr": lr,
         "grid": grid,
@@ -490,10 +418,12 @@ def main(
         "log_every": log_every,
         "seed": seed,
         "in_dim": in_dim,
+        # Basis-specific kwargs land in their own sub-dict so config.json
+        # readers can pick out "what made this run different" without
+        # colliding key names across bases (e.g. siren `omega` vs rff `sigma`).
+        "basis_kwargs": basis_extras,
     }
     (output_dir / "config.json").write_text(json.dumps(config, indent=2))
-
-    model = build_model(basis, in_dim, hidden, layers, omega, key=key, s_init=s_init)
 
     csv_path = output_dir / "loss.csv"
     curve_path = output_dir / "loss_curve.svg"
@@ -503,10 +433,8 @@ def main(
 
     # Descriptive run title for the loss-curve SVG. Fixed across re-renders —
     # live metrics go to a corner annotation, not the title.
-    target_name = Path(image).name if image is not None else f"synthetic:{synthetic}"
-    curve_title = (
-        f"{basis} fit · {target_name} · {grid}x{grid} · hidden={hidden} layers={layers} ω={omega:g} · Adam({lr:g})"
-    )
+    target_name = Path(image).name if image is not None else f"synthetic:{synthetic_choice}"
+    curve_title = f"{basis_label} fit · {target_name} · {grid}x{grid} · hidden={hidden} layers={layers} · Adam({lr:g})"
 
     # Open CSV once and write header; per-step appends share the handle. Faster
     # than re-opening per step, and `flush()` per row keeps `tail -f` live. The
@@ -516,9 +444,10 @@ def main(
         csv_writer.writerow(["step", "loss", "psnr_db"])
 
         def on_step(step: int, loss: float) -> None:
-            # Per-step, fires from inside scan via io_callback (ordered). Stay cheap:
-            # CSV append + history list + occasional console print. Matplotlib lives
-            # in on_chunk because rendering blocks the JAX thread.
+            # Per-step, fires from Python after each chunk's losses come back
+            # from scan. Stay cheap: CSV append + history list + occasional
+            # console print. Matplotlib lives in on_chunk because rendering
+            # blocks the JAX thread.
             psnr = -10.0 * np.log10(max(loss, 1e-12))
             history.append((step, loss))
             csv_writer.writerow([step, f"{loss:.6g}", f"{psnr:.4f}"])
@@ -567,6 +496,555 @@ def main(
 
     _save_recon_png(model, grid, in_dim, target, output_dir / "recon_final.png")
     typer.echo(f"artifacts written to {output_dir}")
+
+
+def _load_target(image: Path | None, synthetic_choice: SyntheticChoice | None, grid: int):
+    """Return ``(coords, target, in_dim)`` for an image path or synthetic target.
+
+    Exactly one of ``image`` / ``synthetic_choice`` must be set. Per-basis
+    subcommands take ``--image`` (only image fits make sense for non-SIREN
+    bases in this example); the dedicated ``synthetic`` subcommand passes
+    a ``SyntheticChoice``.
+    """
+    if image is not None:
+        coords, target = load_image(image, grid)
+        return coords, target, int(coords.shape[-1])
+    if synthetic_choice is not None:
+        coords, target = synthetic_target(synthetic_choice, grid)
+        return coords, target, 2
+    raise typer.BadParameter("provide either --image or pick the `synthetic` subcommand.")
+
+
+# -- Per-basis subcommands ------------------------------------------------- #
+#
+# One subcommand per basis class. Each owns exactly the kwargs that *that*
+# basis takes (no shared ω where there is none, no s_init silently dropped).
+# Construction goes straight through ``ondes.{Basis}(...)`` — no enum, no
+# discriminator dict. The library exposes the kinds via separate classes;
+# the CLI mirrors that.
+
+
+# Tiny helper for the shared `--image` option — Typer needs an explicit
+# `typer.Option(...)` per parameter, so this factory produces a fresh sentinel
+# for each subcommand instead of trying to share one across signatures.
+
+
+def _image_option() -> Any:
+    return typer.Option(
+        ...,
+        help="Path to image to fit.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    )
+
+
+@app.command()
+def siren(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of hidden layers."),
+    omega: float = typer.Option(30.0, help="ω init for both first and hidden layers (Sitzmann+ 2020)."),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(5e-4, help="Adam learning rate (Sitzmann+ 2020 regime: 1e-4 to 5e-4)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with SIREN (Sitzmann+ 2020)."""
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.SIREN(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        omega_first=omega,
+        omega_hidden=omega,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="siren",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"omega": omega},
+    )
+
+
+@app.command()
+def hsiren(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of hidden layers."),
+    omega: float = typer.Option(30.0, help="ω init for both first and hidden layers (Cai & Pan 2024 default)."),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(5e-4, help="Adam learning rate (SIREN regime)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with H-SIREN (Cai & Pan 2024)."""
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.HSIREN(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        omega_first=omega,
+        omega_hidden=omega,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="hsiren",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"omega": omega},
+    )
+
+
+@app.command()
+def wire(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of hidden layers."),
+    omega: float = typer.Option(10.0, help="ω init for both first and hidden layers (Saragadam+ 2023 default)."),
+    s_init: float = typer.Option(
+        10.0, "--s-init", help="Gaussian-envelope width init (paper σ=10 for natural images)."
+    ),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(1e-3, help="Adam learning rate (WIRE codebase default)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with WIRE (Saragadam+ 2023)."""
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.WIRE(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        omega_first=omega,
+        omega_hidden=omega,
+        s_init=s_init,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="wire",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"omega": omega, "s_init": s_init},
+    )
+
+
+@app.command()
+def finer(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of hidden layers."),
+    omega: float = typer.Option(30.0, help="ω init for the first layer (paper preserves omega_hidden=1.0)."),
+    first_bias_scale: float = typer.Option(5.0, help="Uniform bound for the first layer's bias (Liu+ 2024 default)."),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(5e-4, help="Adam learning rate (FINER image-fit regime)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with FINER (Liu+ 2024)."""
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.FINER(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        omega_first=omega,
+        first_bias_scale=first_bias_scale,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="finer",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"omega": omega, "first_bias_scale": first_bias_scale},
+    )
+
+
+@app.command()
+def rff(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of hidden ReLU layers."),
+    sigma: float = typer.Option(
+        10.0,
+        help="Bandwidth of the Gaussian-RFF projection (Tancik+ 2020 default for natural images).",
+    ),
+    num_freqs: int = typer.Option(256, help="Number of sampled Fourier frequencies."),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(1e-4, help="Adam learning rate (Tancik+ 2020 default)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with Random Fourier Features + ReLU MLP (Tancik+ 2020)."""
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.RFF(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        sigma=sigma,
+        num_freqs=num_freqs,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="rff",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"sigma": sigma, "num_freqs": num_freqs},
+    )
+
+
+@app.command()
+def bacon(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of recurrence steps."),
+    max_freq: float = typer.Option(
+        256.0,
+        help="Target overall output bandwidth (cycles/coord unit; Lindell+ 2022 default).",
+    ),
+    quantization_interval: float = typer.Option(
+        2.0 * float(jnp.pi),
+        "--quant",
+        help="Discrete-frequency grid spacing (paper default 2π).",
+    ),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(1e-3, help="Adam learning rate (BACON image-fit demo default)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with BACON (Lindell+ 2022)."""
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.BACON(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        max_freq=max_freq,
+        quantization_interval=quantization_interval,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="bacon",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"max_freq": max_freq, "quantization_interval": quantization_interval},
+    )
+
+
+@app.command(name="fourier-mfn")
+def fourier_mfn(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of recurrence steps."),
+    input_scale: float = typer.Option(256.0, help="Filter-frequency uniform-init scale (Fathony+ 2021 default)."),
+    weight_scale: float = typer.Option(1.0, help="Recurrence-linear uniform-init scale (paper default)."),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(1e-3, help="Adam learning rate (MFN image-fit default)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with Fourier MFN (Fathony+ 2021)."""
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.FourierMFN(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        input_scale=input_scale,
+        weight_scale=weight_scale,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="fourier-mfn",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"input_scale": input_scale, "weight_scale": weight_scale},
+    )
+
+
+@app.command(name="gabor-mfn")
+def gabor_mfn(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of recurrence steps."),
+    alpha: float = typer.Option(6.0, help="Gamma-prior shape on filter scales (Fathony+ 2021 default)."),
+    beta: float = typer.Option(1.0, help="Gamma-prior rate on filter scales (paper default)."),
+    weight_scale: float = typer.Option(1.0, help="Recurrence-linear uniform-init scale (paper default)."),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(1e-3, help="Adam learning rate (MFN image-fit default)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with Gabor MFN (Fathony+ 2021)."""
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.GaborMFN(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        alpha=alpha,
+        beta=beta,
+        weight_scale=weight_scale,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="gabor-mfn",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"alpha": alpha, "beta": beta, "weight_scale": weight_scale},
+    )
+
+
+@app.command()
+def pnf(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of recurrence steps."),
+    input_scale: float = typer.Option(256.0, help="Filter-frequency uniform-init scale (matches MFN)."),
+    weight_scale: float = typer.Option(1.0, help="Recurrence-linear + mix-layer uniform-init scale (paper default)."),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(1e-3, help="Adam learning rate (Yang+ 2022 default)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with PNF (Yang+ 2022)."""
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.PNF(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        input_scale=input_scale,
+        weight_scale=weight_scale,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="pnf",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"input_scale": input_scale, "weight_scale": weight_scale},
+    )
+
+
+@app.command()
+def synthetic(
+    target: SyntheticChoice = typer.Option(SyntheticChoice.SINUSOID, help="Named synthetic target."),
+    hidden: int = typer.Option(64, help="Hidden dim."),
+    layers: int = typer.Option(3, help="Number of hidden layers."),
+    omega: float = typer.Option(30.0, help="SIREN ω init."),
+    steps: int = typer.Option(200, help="Training steps (low default — synthetics fit fast)."),
+    lr: float = typer.Option(1e-3, help="Adam learning rate (synthetic targets tolerate 1e-3)."),
+    grid: int = typer.Option(32, help="Grid resolution."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit a named synthetic target (sinusoid / gaussian_bump / mandelbrot) with SIREN.
+
+    A self-contained smoke fit — no external image needed. Uses SIREN because
+    it's the basis the synthetic-target tests pin to; pick a different basis
+    by running the corresponding subcommand against an image instead.
+    """
+    key = jax.random.key(seed)
+    coords, target_arr, in_dim = _load_target(None, target, grid)
+    inr = ondes.SIREN(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        omega_first=omega,
+        omega_hidden=omega,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="siren",
+        image=None,
+        synthetic_choice=target,
+        in_dim=in_dim,
+        coords=coords,
+        target=target_arr,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={"omega": omega, "synthetic_target": str(target)},
+    )
 
 
 if __name__ == "__main__":
