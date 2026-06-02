@@ -170,6 +170,21 @@ def test_rff_body_rejects_zero_hidden_layers(out_features):
         RFF(in_dim=2, hidden_dim=8, num_hidden_layers=0, key=jax.random.PRNGKey(0), out_features=out_features)
 
 
+def test_rff_fix_encoding_mask_isolates_B_matrix():
+    # Given: an RFF body and its fix-encoding mask
+    # When: partitioning the body
+    # Then: the "fixed" half contains the encoding `B` and the learnable half
+    # has a non-array placeholder there. The mask is load-bearing: users pass
+    # it to optax.masked / eqx.partition to keep `B` frozen, matching the
+    # Gaussian-RFF paper's "draw once and freeze" convention.
+    body = RFF(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.PRNGKey(7), num_freqs=16)
+    mask = body.fix_encoding_mask()
+    learnable, fixed = eqx.partition(body, mask)
+
+    assert eqx.is_array(fixed.B)
+    assert not eqx.is_array(learnable.B)
+
+
 def test_rff_body_layer_pytree_homogeneous():
     # Given: an RFF body where in_dim == hidden_dim
     # When: comparing the pytree structure of every MLP layer

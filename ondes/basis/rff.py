@@ -16,6 +16,7 @@ Init follows the paper's reference TF/PyTorch implementations: encoding
 to the ReLU non-linearity; biases are zeroed.
 """
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
@@ -75,6 +76,16 @@ class RFF(Body):
             recommend ``sigma=10`` for natural-image fitting at the default
             ``num_freqs=256``; reduce for smoother targets, increase for
             sharper.
+
+    Note:
+        The encoding matrix ``B`` is sampled at construction and is meant to
+        be **non-trainable** (the Gaussian-RFF paper draws it once and freezes
+        it; the bandwidth knob is ``sigma``, baked into ``B`` at construction,
+        not a separate gradient). ``ondes`` does not own optimiser plumbing,
+        so this is enforced by the user with ``eqx.partition`` (or
+        ``optax.masked``). The ``fix_encoding_mask()`` method returns a mask
+        pytree downstream code can use directly — symmetric with
+        :meth:`ondes.basis.bacon.BACON.fix_filters_mask`.
     """
 
     B: Float[Array, "num_freqs rank"]
@@ -108,6 +119,19 @@ class RFF(Body):
         self.out_features = out_features
         self.hidden_dim = hidden_dim
         self.num_hidden_layers = num_hidden_layers
+
+    def fix_encoding_mask(self):
+        """Return a pytree mask that selects only the learnable (non-encoding-B) leaves.
+
+        Use with ``eqx.partition(body, body.fix_encoding_mask())`` to split the
+        body into ``(learnable, fixed)`` halves before applying an optimiser
+        update — the fixed half (encoding matrix ``B``) must not receive
+        gradient steps to match the Gaussian-RFF paper's frozen-features
+        convention.
+        """
+        # Start from "everything is learnable", then zero out the encoding B.
+        mask = jax.tree_util.tree_map(lambda x: eqx.is_array(x), self)
+        return eqx.tree_at(lambda b: b.B, mask, False)
 
     def _encode(self, coord):
         angles = 2.0 * jnp.pi * (self.B @ coord)
