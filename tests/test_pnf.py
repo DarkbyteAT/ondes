@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from ondes import PNF
+from ondes import PNF, FourierMFN
 from ondes.basis import BasisModule, Body
 from ondes.basis.mfn import FourierFilter
 
@@ -70,13 +70,29 @@ def test_pnf_has_n_plus_one_fourier_filters():
 def test_pnf_mix_matrix_changes_output_vs_zero_mix():
     # Given: a PNF body and the same body with mix_W zeroed
     # When: comparing outputs
-    # Then: they differ — the mix layer must actually contribute. With mix_W=0
-    # PNF reduces to an MFN (z_{i+1} = g_{i+1}(x) * (W z + b)); the test
-    # checks the comparison is non-trivial, so the mix layer is exercised.
+    # Then: they differ — the mix layer must actually contribute. The paper-
+    # faithful PNF recurrence (Eq. 5, z_{i+1} = g_{i+1}(x) * M_i z_i) is purely
+    # multiplicative in z_i with no additive bias, so zeroing mix_W collapses
+    # every step after the first to identically zero (the readout then maps
+    # 0 to its bias). A non-zero mix_W produces a non-trivially different
+    # output; this test pins both that the mix path is wired through the
+    # forward pass AND that the recurrence has the bias-free structure (a
+    # spurious additive bias inside the multiplication would let zeroed-mix
+    # PNF still vary with the coord, breaking the equality with readout_b
+    # below).
     body = PNF(in_dim=2, hidden_dim=16, num_hidden_layers=3, key=jax.random.key(7))
     zeroed_mix = eqx.tree_at(lambda b: b.mix_W, body, jnp.zeros_like(body.mix_W))
     coord = jnp.array([0.3, -0.4])
     assert not jnp.allclose(body(coord), zeroed_mix(coord))
+    # Zeroed-mix PNF on any coord post-step-0 is readout(0) = readout_b.
+    # Check a second distinct coord agrees with the first — bias-free
+    # recurrence makes the post-zero-mix output coord-invariant.
+    other = jnp.array([-0.1, 0.7])
+    assert jnp.allclose(zeroed_mix(coord), zeroed_mix(other)), (
+        "zeroed-mix PNF should be coord-invariant under the paper's bias-free "
+        "recurrence (every step after the first collapses to 0); a coord-varying "
+        "output here means a stray additive bias is hiding inside the multiplication."
+    )
 
 
 def test_pnf_body_film_modulation_changes_output():
@@ -165,3 +181,86 @@ def test_pnf_body_rejects_zero_hidden_layers():
     # Then: assertion fires
     with pytest.raises(AssertionError):
         PNF(in_dim=2, hidden_dim=8, num_hidden_layers=0, key=jax.random.key(0))
+
+
+def test_pnf_has_no_recurrence_bias_unlike_fourier_mfn():
+    # Given: PNF and FourierMFN at the same arch
+    # When: introspecting their pytree leaves
+    # Then: FourierMFN carries a `recurrence_b` field (Fathony+ 2021's
+    # additive bias inside the multiplication: z_{i+1} = g_{i+1}(x) *
+    # (W_i z_i + b_i)), while PNF does NOT — the paper's Eq. 5 has
+    # z_{i+1} = g_{i+1}(x) * (M_i z_i), bias-free, and ondes mirrors that.
+    # The earlier broken PNF carried both a redundant `recurrence_W` and
+    # a stray `recurrence_b`; this test pins their absence so a future
+    # refactor can't silently re-introduce them.
+    key = jax.random.key(0)
+    pnf = PNF(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=key)
+    mfn = FourierMFN(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=key)
+
+    assert hasattr(mfn, "recurrence_b"), "FourierMFN should carry a recurrence-bias field"
+    assert hasattr(mfn, "recurrence_W"), "FourierMFN should carry a recurrence-linear field"
+    assert not hasattr(pnf, "recurrence_b"), (
+        "PNF must not carry a `recurrence_b` — the paper's recurrence is bias-free (Eq. 5). "
+        "Re-introducing it collapses PNF back to a redundantly-parameterised FourierMFN."
+    )
+    assert not hasattr(pnf, "recurrence_W"), (
+        "PNF must not carry a `recurrence_W` — the single linear is `mix_W` (the paper's W_l). "
+        "Carrying both is the redundancy the round-6 review flagged."
+    )
+
+
+def test_pnf_recurrence_differs_from_fourier_mfn_at_matched_filters():
+    # Given: PNF and FourierMFN constructed with identical filter weights
+    # (we copy filters from PNF into the FourierMFN body via eqx.tree_at)
+    # and identical recurrence linear (mix_W -> recurrence_W). The only
+    # structural residual is FourierMFN's `recurrence_b` term, which is
+    # randomly initialised and therefore non-zero with probability 1.
+    #
+    # When: forward-passing both on a common coord
+    #
+    # Then: outputs differ. The bug-version PNF (`z_{i+1} = g_{i+1} *
+    # ((M+W) z + b)`) was algebraically equivalent to a FourierMFN with
+    # the same combined linear and identical bias — under matched-filter
+    # / matched-W conditions the two would have agreed exactly. The
+    # paper-faithful PNF has no bias path, so the outputs must disagree
+    # by exactly readout( g_1(x) * b_0 ) at one-layer depth — non-zero
+    # by random init.
+    in_dim, hidden_dim, num_layers = 2, 8, 1  # 1 layer keeps the math closed-form-checkable.
+    key = jax.random.key(42)
+    pnf = PNF(in_dim=in_dim, hidden_dim=hidden_dim, num_hidden_layers=num_layers, key=key)
+    mfn = FourierMFN(in_dim=in_dim, hidden_dim=hidden_dim, num_hidden_layers=num_layers, key=jax.random.key(43))
+
+    # Splice PNF's filters and mix_W into the MFN body so the only
+    # remaining difference is the recurrence-linear `b` (and the
+    # respective readouts, which we also align).
+    mfn = eqx.tree_at(lambda m: m.filters, mfn, pnf.filters)
+    mfn = eqx.tree_at(lambda m: m.recurrence_W, mfn, pnf.mix_W)
+    mfn = eqx.tree_at(lambda m: m.readout_W, mfn, pnf.readout_W)
+    mfn = eqx.tree_at(lambda m: m.readout_b, mfn, pnf.readout_b)
+    # Crucially, mfn.recurrence_b is left at its random init — this is the
+    # structural feature that distinguishes PNF (no bias) from FourierMFN
+    # (with bias).
+    assert bool(jnp.any(mfn.recurrence_b != 0)), "expected the random init to produce a non-zero recurrence_b"
+
+    coord = jnp.array([0.3, -0.4])
+    pnf_out = pnf(coord)
+    mfn_out = mfn(coord)
+
+    # The two MUST differ. If the bug were back (PNF == FourierMFN up to
+    # redundant parameter-relabelling), the bias term would coincide and
+    # this would pass falsely; with the paper-faithful PNF, the bias path
+    # is a structural absence and the outputs are guaranteed to differ.
+    assert not jnp.allclose(pnf_out, mfn_out), (
+        f"PNF and FourierMFN at matched filters / matched linear must differ "
+        f"(the structural residual is FourierMFN's bias path); got pnf={pnf_out}, mfn={mfn_out}"
+    )
+    # And the difference is exactly the bias path's contribution at this
+    # depth: readout_W @ (g_1(coord) * recurrence_b) (one-layer closed form).
+    expected_residual = pnf.readout_W @ (pnf.filters[1](coord) * mfn.recurrence_b[0])
+    if pnf.out_features is None:
+        expected_residual = expected_residual.squeeze(-1)
+    assert jnp.allclose(mfn_out - pnf_out, expected_residual, atol=1e-5), (
+        f"the disagreement between PNF and FourierMFN at num_hidden_layers=1 should equal "
+        f"readout_W @ (g_1(x) * mfn.recurrence_b[0]); got diff={mfn_out - pnf_out}, "
+        f"expected={expected_residual}"
+    )
