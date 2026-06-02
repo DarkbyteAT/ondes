@@ -182,6 +182,18 @@ def train(
     to keep the JIT cache stable (a final smaller chunk would recompile).
     Default `chunk_size=100` balances on_chunk artifact freshness against
     per-chunk dispatch overhead.
+
+    Step-label convention: the scan body computes ``loss`` *before*
+    ``apply_updates``, so ``losses[j]`` is the loss at the *pre-update*
+    parameters for that iteration — i.e. the loss at step ``base + j``,
+    not ``base + j + 1``. We therefore relabel scan-returned losses as
+    step ``base + j`` and skip ``j == 0`` of chunk 0 because the
+    ``initial_loss`` seed at step 0 already covers it. After the loop
+    we make one extra forward pass on the trained model and report it
+    as step ``steps`` so the post-final-update loss actually lands in
+    CSV / curve artifacts. Total entry count is unchanged
+    (``steps + 1``) — every label now points at the matching parameter
+    state.
     """
     optimiser = optax.adam(lr)
     opt_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
@@ -212,11 +224,16 @@ def train(
         (model, opt_state), losses = run_chunk(model, opt_state, coords, target)
         # Materialise the chunk's per-step losses once and feed them to on_step.
         # Per-step cadence, single host transfer — much cheaper than io_callback.
+        # `losses[j]` is the pre-update loss at step `base + j` (see docstring).
+        # The `base + j > 0` guard skips the very first sample so we don't
+        # re-emit step 0 — the `initial_loss` seed above already reported it.
         if on_step is not None:
             losses_np = np.asarray(losses)
             base = i * chunk_size
             for j, loss_val in enumerate(losses_np):
-                on_step(base + j + 1, float(loss_val))
+                step = base + j
+                if step > 0:
+                    on_step(step, float(loss_val))
         if on_chunk is not None:
             # Re-evaluate loss outside the scan so on_chunk sees a value
             # consistent with the post-update model state (the in-scan losses
@@ -224,6 +241,11 @@ def train(
             chunk_loss = float(jitted_loss(model, coords, target))
             on_chunk(step=(i + 1) * chunk_size, loss=chunk_loss, model=model)
     final_loss = float(jitted_loss(model, coords, target))
+    # Explicit final-step entry: without this the post-update loss at step
+    # `steps` is never recorded — the scan only yields pre-update losses, so
+    # the model state that ends training would be invisible in CSV / curve.
+    if on_step is not None:
+        on_step(steps, final_loss)
     return model, initial_loss, final_loss
 
 

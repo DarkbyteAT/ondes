@@ -19,7 +19,7 @@ import jax
 import pytest
 
 import ondes
-from examples.fit_image import Model, synthetic_target, train
+from examples.fit_image import Model, loss_fn, synthetic_target, train
 
 
 @pytest.mark.parametrize("target_name", ["sinusoid", "gaussian_bump", "mandelbrot"])
@@ -42,4 +42,66 @@ def test_siren_fits_synthetic_target(target_name):
         f"{target_name}: expected final_loss < 0.3 * initial_loss, "
         f"got initial={initial_loss:.6f}, final={final_loss:.6f}, "
         f"ratio={final_loss / initial_loss:.3f}"
+    )
+
+
+def test_train_on_step_labels_match_parameter_state():
+    # Given: a tiny SIREN, the sinusoid target, and a 2-step train at chunk_size=2
+    # so the entire run is one scan + one final-loss forward pass. The captured
+    # on_step calls should be exactly:
+    #   step 0  → loss(initial_model)       (seeded before the loop)
+    #   step 1  → loss(model after 1 update) (pre-update for j=1 in the scan)
+    #   step 2  → loss(trained model)        (post-update final forward pass)
+    #
+    # The previous label scheme reported losses[j] as step `base + j + 1`,
+    # which meant step 1 carried the loss(initial_model) value (a duplicate
+    # of step 0) and step `steps` was never emitted. This test pins the
+    # corrected alignment so the bug can't silently regress.
+    coords, target = synthetic_target("sinusoid", grid_n=8)
+    key = jax.random.key(0)
+    initial = Model(
+        inr=ondes.SIREN(in_dim=2, hidden_dim=8, num_hidden_layers=2, omega_first=30.0, omega_hidden=30.0, key=key)
+    )
+
+    captured: list[tuple[int, float]] = []
+
+    def capture(step: int, loss: float) -> None:
+        captured.append((step, loss))
+
+    # When: we train for 2 steps with chunk_size=2 (one scan + one final eval).
+    trained, _, _ = train(initial, coords, target, steps=2, lr=1e-3, chunk_size=2, on_step=capture)
+
+    # Then: exactly three on_step entries, at steps 0, 1, 2.
+    assert [s for s, _ in captured] == [0, 1, 2], f"expected steps [0, 1, 2], got {[s for s, _ in captured]}"
+
+    step0_loss = dict(captured)[0]
+    step1_loss = dict(captured)[1]
+    step2_loss = dict(captured)[2]
+
+    # The label at step 0 must equal the loss on the *initial* model — the seed
+    # entry, not a scan-returned value. The label at step `steps` must equal
+    # the loss on the *returned* model — the final forward pass after the loop.
+    expected_step0 = float(loss_fn(initial, coords, target))
+    expected_step2 = float(loss_fn(trained, coords, target))
+    # Tight equality (no atol/rtol) — these are the same float computation, not
+    # just close enough. A drift here means the labels stopped aligning.
+    assert step0_loss == expected_step0, (
+        f"step 0 should equal loss(initial_model): got {step0_loss} vs {expected_step0}"
+    )
+    assert step2_loss == expected_step2, (
+        f"step 2 should equal loss(trained_model): got {step2_loss} vs {expected_step2}"
+    )
+
+    # The label at step 1 must NOT duplicate step 0 — the old off-by-one bug
+    # would emit step1_loss == loss(initial_model) and never emit step2_loss
+    # at all. Since training descends on this seed/target, step 1's pre-update
+    # loss is for the model after one Adam step, strictly less than the initial
+    # loss and strictly greater than the post-two-step loss.
+    assert step1_loss != step0_loss, (
+        f"step 1 must not duplicate step 0 — that's the regressed off-by-one bug. "
+        f"step0={step0_loss}, step1={step1_loss}"
+    )
+    assert step0_loss > step1_loss > step2_loss, (
+        f"expected step0 > step1 > step2 (descending training), "
+        f"got step0={step0_loss}, step1={step1_loss}, step2={step2_loss}"
     )
