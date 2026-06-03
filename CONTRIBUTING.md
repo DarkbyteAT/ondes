@@ -175,7 +175,7 @@ Create `tests/test_<name>.py` mirroring `tests/test_basis.py`'s coverage for the
 - Forward-pass output shape under default kwargs.
 - Init-scheme correctness — sample the weights and assert the bound matches the paper formula. The `siren_init` tests in `tests/test_basis.py` are the template.
 - `out_features` canonicalisation — confirm `out_features=1` and `out_features=None` produce identical pytrees.
-- Scalar vs vector return — `out_features=None` returns `(,)`, `out_features=N>1` returns `(N,)`.
+- Scalar vs vector return — `out_features=None` returns shape `()` (0-d scalar), `out_features=N>1` returns shape `(N,)`.
 - FiLM modulation actually changes the output (cross-check that the contract isn't a no-op).
 - Gradient through both scalar and vector paths is finite and non-zero.
 - JIT-compilability of `body()` and `body.trunk()`.
