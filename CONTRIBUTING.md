@@ -114,7 +114,16 @@ Pyright runs in strict-ish mode; check `pyrightconfig.json` for the exact config
 Google-style with LaTeX-friendly math:
 
 ```python
-def siren_init(in_dim: int, out_dim: int, omega: float, is_first: bool, key: Key[Array, ""]) -> tuple[...]:
+from jaxtyping import Array, Float, Key
+
+
+def siren_init(
+    in_dim: int,
+    out_dim: int,
+    omega: float,
+    is_first: bool,
+    key: Key[Array, ""],
+) -> tuple[Float[Array, "out in"], Float[Array, "out"]]:
     """Sample (W, b) under the SIREN initialisation scheme.
 
     First-layer weights are drawn uniformly from $[-1/\\text{in\\_dim}, 1/\\text{in\\_dim}]$;
