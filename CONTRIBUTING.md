@@ -16,12 +16,13 @@ If you're not sure whether your idea fits — open a GitHub issue first and ask.
 ```bash
 git clone https://github.com/DarkbyteAT/ondes.git
 cd ondes
-uv sync
 source scripts/enable-venv.sh
 uv run pytest tests/
 ```
 
 A fresh clone should reach a green test run in under thirty seconds on a recent machine.
+
+`scripts/enable-venv.sh` does meaningful setup work beyond what `uv run` covers on its own: it creates `.venv/` on first invocation, runs `uv sync --group dev` to pull in the dev-group dependencies (`uv run` resolves only the project's main dependencies), and installs the `pre-commit` git hooks. The pre-commit install step is load-bearing — without it the silent-no-op gotcha described in the next section can't trigger because the hooks aren't wired up at all, and formatting violations only surface when CI fails.
 
 ## The three quality gates
 
