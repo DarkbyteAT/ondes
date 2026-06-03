@@ -157,7 +157,7 @@ class _MFNBody(Body):
         num_hidden_layers: int,
         hidden_dim: int,
         weight_scale: float,
-        keys: Key[Array, " n_layers"],
+        keys: Key[Array, "n_layers"],
     ) -> tuple[Float[Array, "n_layers hidden hidden"], Float[Array, "n_layers hidden"]]:
         """Stack ``num_hidden_layers`` recurrence-linear ``(W, b)`` pairs along axis 0."""
         Ws = []
