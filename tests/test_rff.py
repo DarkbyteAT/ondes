@@ -170,7 +170,7 @@ def test_rff_body_rejects_zero_hidden_layers(out_features: int | None) -> None:
         RFF(in_dim=2, hidden_dim=8, num_hidden_layers=0, key=jax.random.key(0), out_features=out_features)
 
 
-def test_rff_fix_encoding_mask_isolates_B_matrix():
+def test_rff_fix_encoding_mask_isolates_B_matrix() -> None:
     # Given: an RFF body and its fix-encoding mask
     # When: partitioning the body
     # Then: the "fixed" half contains the encoding `B` and the learnable half

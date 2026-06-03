@@ -22,6 +22,7 @@ discriminators"). The CLI follows the library's discipline so the example
 doesn't model a pattern the library refuses to ship.
 """
 
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import typer
+from jaxtyping import Array, Float
 from PIL import Image
 
 import ondes
@@ -59,12 +61,12 @@ class Model(eqx.Module):
 
     inr: ondes.Body
 
-    def __call__(self, coord):
+    def __call__(self, coord: Float[Array, "in"]) -> Float[Array, ""]:
         """Forward pass: coord-of-shape-`(in_dim,)` → scalar amplitude."""
         return self.inr(coord)
 
 
-def make_coords(*axes_sizes: int):
+def make_coords(*axes_sizes: int) -> Float[Array, "n_points n_axes"]:
     """Build a regular grid in `[-1, 1]^len(axes_sizes)` and return `(prod, n_axes)` coords.
 
     Per-axis sizes are explicit so spatial axes (grid_n cells) and the channel
@@ -80,7 +82,9 @@ def make_coords(*axes_sizes: int):
     return jnp.stack([m.ravel() for m in mesh], axis=-1)
 
 
-def synthetic_target(name: SyntheticChoice, grid_n: int):
+def synthetic_target(
+    name: SyntheticChoice | str, grid_n: int
+) -> tuple[Float[Array, "n_points 2"], Float[Array, "n_points"]]:
     """Return `(coords, values)` for a named synthetic 2D target.
 
     Accepts the SyntheticChoice enum (via the CLI) or a bare string (via tests).
@@ -106,7 +110,7 @@ def synthetic_target(name: SyntheticChoice, grid_n: int):
     return coords, values
 
 
-def load_image(path: Path, grid_n: int):
+def load_image(path: Path, grid_n: int) -> tuple[Float[Array, "n_points in_dim"], Float[Array, "n_points"]]:
     """Load a PNG/JPG and return `(coords, values)` in the value-function shape.
 
     RGB is treated as `(x, y, c) → amplitude`: channel is a coord, not an
@@ -145,23 +149,27 @@ def load_image(path: Path, grid_n: int):
     return coords, jnp.asarray(img.ravel())
 
 
-def loss_fn(model, coords, target):
+def loss_fn(
+    model: Model,
+    coords: Float[Array, "n_points in"],
+    target: Float[Array, "n_points"],
+) -> Float[Array, ""]:
     """Mean-squared error between the INR's predictions and the target."""
     pred = jax.vmap(model)(coords)
     return jnp.mean((pred - target) ** 2)
 
 
 def train(
-    model,
-    coords,
-    target,
+    model: Model,
+    coords: Float[Array, "n_points in"],
+    target: Float[Array, "n_points"],
     *,
     steps: int,
     lr: float,
     chunk_size: int = 100,
-    on_step=None,
-    on_chunk=None,
-):
+    on_step: Callable[[int, float], None] | None = None,
+    on_chunk: Callable[..., None] | None = None,
+) -> tuple[Model, float, float]:
     """Chunked Adam+scan training loop with two callback hooks.
 
     Returns `(trained_model, initial_loss, final_loss)`.
@@ -264,12 +272,12 @@ def train(
 
 
 @eqx.filter_jit
-def _vmap_model(model, coords):
+def _vmap_model(model: Model, coords: Float[Array, "n_points in"]) -> Float[Array, "n_points"]:
     """Pure JIT'd vmap so cache hits across calls with different model/coords."""
     return jax.vmap(model)(coords)
 
 
-def reconstruct(model, grid_n: int, in_dim: int):
+def reconstruct(model: Model, grid_n: int, in_dim: int) -> np.ndarray:
     """Evaluate the trained model on a regular grid; returns the right-shaped array.
 
     For `in_dim == 2`: returns `(grid_n, grid_n)`.
@@ -285,7 +293,7 @@ def reconstruct(model, grid_n: int, in_dim: int):
     raise ValueError(f"unsupported in_dim for reconstruction: {in_dim}")
 
 
-def _to_uint8_image(arr: np.ndarray, target) -> np.ndarray:
+def _to_uint8_image(arr: np.ndarray, target: Float[Array, "..."]) -> np.ndarray:
     """Rescale reconstruction by the *target's* range and quantise to uint8.
 
     Target range (not prediction range) is the ground truth — a non-negative
@@ -301,7 +309,7 @@ def _to_uint8_image(arr: np.ndarray, target) -> np.ndarray:
     return (np.clip(rescaled, 0.0, 1.0) * 255).astype(np.uint8)
 
 
-def _save_recon_png(model, grid_n: int, in_dim: int, target, path: Path) -> None:
+def _save_recon_png(model: Model, grid_n: int, in_dim: int, target: Float[Array, "..."], path: Path) -> None:
     """Reconstruct on a grid and write a PNG. Used for snapshots + final output."""
     recon = reconstruct(model, grid_n, in_dim)
     Image.fromarray(_to_uint8_image(recon, target)).save(path)
@@ -389,8 +397,8 @@ def _train_and_save(
     image: Path | None,
     synthetic_choice: SyntheticChoice | None,
     in_dim: int,
-    coords,
-    target,
+    coords: Float[Array, "n_points in"],
+    target: Float[Array, "n_points"],
     hidden: int,
     layers: int,
     steps: int,
@@ -499,7 +507,7 @@ def _train_and_save(
                 csv_file.flush()
                 typer.echo(f"  step {step:>6d}  loss {loss:.6g}  PSNR {psnr:.2f} dB")
 
-        def on_chunk(*, step: int, loss: float, model) -> None:
+        def on_chunk(*, step: int, loss: float, model: Model) -> None:
             # Per-chunk, fires from Python. Heavy work goes here.
             _write_loss_curve(history, curve_path, title=curve_title)
             chunk_idx = step // chunk_size
@@ -540,7 +548,9 @@ def _train_and_save(
     typer.echo(f"artifacts written to {output_dir}")
 
 
-def _load_target(image: Path | None, synthetic_choice: SyntheticChoice | None, grid: int):
+def _load_target(
+    image: Path | None, synthetic_choice: SyntheticChoice | None, grid: int
+) -> tuple[Float[Array, "n_points in"], Float[Array, "n_points"], int]:
     """Return ``(coords, target, in_dim)`` for an image path or synthetic target.
 
     Exactly one of ``image`` / ``synthetic_choice`` must be set. Per-basis

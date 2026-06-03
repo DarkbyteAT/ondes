@@ -183,7 +183,7 @@ def test_pnf_body_rejects_zero_hidden_layers() -> None:
         PNF(in_dim=2, hidden_dim=8, num_hidden_layers=0, key=jax.random.key(0))
 
 
-def test_pnf_has_no_recurrence_bias_unlike_fourier_mfn():
+def test_pnf_has_no_recurrence_bias_unlike_fourier_mfn() -> None:
     # Given: PNF and FourierMFN at the same arch
     # When: introspecting their pytree leaves
     # Then: FourierMFN carries a `recurrence_b` field (Fathony+ 2021's
@@ -209,7 +209,7 @@ def test_pnf_has_no_recurrence_bias_unlike_fourier_mfn():
     )
 
 
-def test_pnf_recurrence_differs_from_fourier_mfn_at_matched_filters():
+def test_pnf_recurrence_differs_from_fourier_mfn_at_matched_filters() -> None:
     # Given: PNF and FourierMFN constructed with identical filter weights
     # (we copy filters from PNF into the FourierMFN body via eqx.tree_at)
     # and identical recurrence linear (mix_W -> recurrence_W). The only
