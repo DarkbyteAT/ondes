@@ -245,8 +245,10 @@ All three green, no exceptions, before requesting review.
 6. **Squash-merge with branch deletion** once approved:
 
    ```bash
-   gh pr merge <N> --squash --delete-branch --repo DarkbyteAT/ondes
+   gh pr merge <pr-number> --squash --delete-branch --repo DarkbyteAT/ondes
    ```
+
+   `<pr-number>` is a placeholder — substitute the actual integer (e.g. `13`). Do not copy-paste the literal angle-bracket form into a shell; bash reads `<` as input redirection and would try to open a file named `pr-number`.
 
    Keeps `main`'s history one-commit-per-PR; avoids stale branches piling up.
 
