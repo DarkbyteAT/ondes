@@ -241,7 +241,7 @@ All three green, no exceptions, before requesting review.
 
    Keeps `main`'s history one-commit-per-PR; avoids stale branches piling up.
 
-7. **Bring branches up to date** with `git merge origin/main`, not `git rebase`. Rebases rewrite history, require force-pushes, and produce more conflict iterations than merges. Rebase only when there's a clear advantage (single-commit branch with no merge history worth preserving).
+7. **Bring branches up to date** with `git fetch origin && git merge origin/main`, not `git rebase`. The fetch step is necessary — `git merge origin/main` without a prior fetch merges the *locally cached* state of `origin/main`, which can be hours or days stale. Rebases rewrite history, require force-pushes, and produce more conflict iterations than merges; rebase only when there's a clear advantage (single-commit branch with no merge history worth preserving).
 
 ## Design records
 
