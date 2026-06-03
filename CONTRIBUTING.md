@@ -124,10 +124,10 @@ def siren_init(
     is_first: bool,
     key: Key[Array, ""],
 ) -> tuple[Float[Array, "out in"], Float[Array, "out"]]:
-    """Sample (W, b) under the SIREN initialisation scheme.
+    r"""Sample (W, b) under the SIREN initialisation scheme.
 
-    First-layer weights are drawn uniformly from $[-1/\\text{in\\_dim}, 1/\\text{in\\_dim}]$;
-    subsequent layers from $[-\\sqrt{6/\\text{in\\_dim}}/\\omega, +\\sqrt{6/\\text{in\\_dim}}/\\omega]$.
+    First-layer weights are drawn uniformly from $[-1/\text{in\_dim}, 1/\text{in\_dim}]$;
+    subsequent layers from $[-\sqrt{6/\text{in\_dim}}/\omega, +\sqrt{6/\text{in\_dim}}/\omega]$.
 
     Args:
         in_dim: Input dimension of the linear map.
