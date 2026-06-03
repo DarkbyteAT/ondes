@@ -146,9 +146,7 @@ class _MFNBody(Body):
     recurrence-linears alternate but live in different parameter families).
     """
 
-    # Concrete subclasses (FourierMFN/GaborMFN) narrow this to a tuple of
-    # FourierFilter/GaborFilter; the base just needs "callable filter modules".
-    filters: tuple
+    filters: tuple[FourierFilter | GaborFilter, ...]
     recurrence_W: Float[Array, "n_layers hidden hidden"]
     recurrence_b: Float[Array, "n_layers hidden"]
 
