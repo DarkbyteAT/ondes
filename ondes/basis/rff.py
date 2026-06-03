@@ -42,6 +42,24 @@ def _kaiming_uniform_relu(
     return W, b
 
 
+def _standard_normal(key, shape):
+    """Draw N(0, 1) samples via the Box–Muller transform.
+
+    Used instead of `jax.random.normal` because jax-mps 0.10.1 crashes when
+    lowering `lax_special.erf_inv` (TypeError in `aval_to_ir_type`), which
+    JAX's `normal` calls under the hood (inverse-erf-of-uniform sampler).
+    Box–Muller only uses uniform draws + `log`, `sqrt`, `sin`, `cos` — all
+    of which lower cleanly on every backend ondes targets. The resulting
+    samples are identically distributed; only the PRNG stream changes.
+    Revisit if jax-mps fixes the lowering.
+    """
+    k1, k2 = jax.random.split(key)
+    # `minval=tiny` keeps `log(u1)` finite even on the unlucky `u1 == 0` draw.
+    u1 = jax.random.uniform(k1, shape, minval=jnp.finfo(jnp.float32).tiny, maxval=1.0)
+    u2 = jax.random.uniform(k2, shape)
+    return jnp.sqrt(-2.0 * jnp.log(u1)) * jnp.cos(2.0 * jnp.pi * u2)
+
+
 class RFFLayer(Basis):
     """RFF hidden layer: ``relu(W @ pre + b)``.
 
@@ -109,7 +127,7 @@ class RFF(Body):
         """Initialise the encoding's ``B`` matrix and the ReLU-MLP layers + readout."""
         out_features = _validate_body_args(num_hidden_layers, out_features)
         k_enc, *rest = jax.random.split(key, num_hidden_layers + 2)
-        self.B = float(sigma) * jax.random.normal(k_enc, (num_freqs, in_dim))
+        self.B = float(sigma) * _standard_normal(k_enc, (num_freqs, in_dim))
         encoded_dim = 2 * num_freqs
 
         layers = []
