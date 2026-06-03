@@ -19,10 +19,10 @@ import jax.numpy as jnp
 import pytest
 
 from ondes import HSIREN, SIREN, WIRE
-from ondes.basis import HSIRENLayer, SIRENLayer, WIRELayer
+from ondes.basis import Basis, Body, HSIRENLayer, SIRENLayer, WIRELayer
 
 
-def _stack_arrays(layers):
+def _stack_arrays(layers: list[Basis]) -> Basis:
     """Stack a list of homogeneous layers along axis 0 of each array leaf.
 
     Only stacks the array-typed leaves; static fields (e.g. ``is_first``) must
@@ -31,7 +31,7 @@ def _stack_arrays(layers):
     return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *layers)
 
 
-def _scan_trunk(body, coord, *, film=None):
+def _scan_trunk(body: Body, coord: jax.Array, *, film: jax.Array | None = None) -> jax.Array:
     """Reimplement Body.trunk via jax.lax.scan over layers 1..N-1.
 
     Layer 0 is applied eagerly because its ``W`` has shape
@@ -81,7 +81,7 @@ def _scan_trunk(body, coord, *, film=None):
 
 
 @pytest.mark.parametrize("body_cls,layer_cls", [(SIREN, SIRENLayer), (HSIREN, HSIRENLayer), (WIRE, WIRELayer)])
-def test_scan_matches_eager_for_loop(body_cls, layer_cls):
+def test_scan_matches_eager_for_loop(body_cls: type, layer_cls: type) -> None:
     # Given: a body of each basis class with multiple hidden layers
     # When: comparing the eager trunk() against the scan-rebuilt trunk
     # Then: outputs match to float32 precision. Demonstrates that scan is
@@ -104,7 +104,7 @@ def test_scan_matches_eager_for_loop(body_cls, layer_cls):
     assert jnp.allclose(eager, scanned, atol=1e-4)
 
 
-def test_scan_matches_eager_with_film_modulation():
+def test_scan_matches_eager_with_film_modulation() -> None:
     # Given: a SIREN body + a FiLM tensor covering all layers
     # When: comparing eager trunk(film=...) against the scan-rebuilt version
     # Then: outputs match. Demonstrates the FiLM-conditioned scan also works
@@ -120,7 +120,7 @@ def test_scan_matches_eager_with_film_modulation():
     assert jnp.allclose(eager, scanned, atol=1e-4)
 
 
-def test_scan_all_n_layers_matches_eager_when_in_dim_equals_hidden_dim():
+def test_scan_all_n_layers_matches_eager_when_in_dim_equals_hidden_dim() -> None:
     # Given: a SIREN body with in_dim == hidden_dim so all N layers stack
     # When: scanning the full layer stack in one go (no layer-0 special case)
     # Then: output matches the eager trunk. Post-#8 the pytree structure is
@@ -147,7 +147,7 @@ def test_scan_all_n_layers_matches_eager_when_in_dim_equals_hidden_dim():
     assert jnp.allclose(eager, scanned, atol=1e-4)
 
 
-def test_naive_stack_all_layers_fails_on_shape_mismatch_when_in_dim_differs():
+def test_naive_stack_all_layers_fails_on_shape_mismatch_when_in_dim_differs() -> None:
     # Given: a realistic SIREN body where in_dim != hidden_dim (coord inputs)
     # When: attempting to stack ALL N layers via jax.tree.map
     # Then: it raises a *shape* error — layer 0's W is (hidden, in_dim) while
@@ -161,7 +161,7 @@ def test_naive_stack_all_layers_fails_on_shape_mismatch_when_in_dim_differs():
         _stack_arrays(list(body.layers))
 
 
-def test_all_layers_stack_cleanly_when_in_dim_equals_hidden_dim():
+def test_all_layers_stack_cleanly_when_in_dim_equals_hidden_dim() -> None:
     # Given: a SIREN body where in_dim == hidden_dim (artificial; not the typical
     # INR shape, but exercises the "all layers genuinely uniform" code path)
     # When: stacking ALL N layers via jax.tree.map
@@ -178,7 +178,7 @@ def test_all_layers_stack_cleanly_when_in_dim_equals_hidden_dim():
 
 
 @pytest.mark.parametrize("body_cls", [SIREN, HSIREN, WIRE])
-def test_layer_pytree_structure_is_homogeneous_across_body(body_cls):
+def test_layer_pytree_structure_is_homogeneous_across_body(body_cls: type) -> None:
     # Given: a body of each basis class in the realistic in_dim != hidden_dim shape
     # When: comparing the pytree structure of every layer against layer 0
     # Then: all layers share identical structure. This is the load-bearing

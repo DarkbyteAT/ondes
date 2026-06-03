@@ -20,7 +20,15 @@ from ondes.encoding import (
 ENCODING_CLASSES = (Identity, Gaussian, LearnedGaussian, Dyadic)
 
 
-def _build_encoding(cls, *, rank=3, num_freqs=8, num_bands=4, sigma=2.5, key=None):
+def _build_encoding(
+    cls: type[Encoding],
+    *,
+    rank: int = 3,
+    num_freqs: int = 8,
+    num_bands: int = 4,
+    sigma: float = 2.5,
+    key: jax.Array | None = None,
+) -> Encoding:
     """Construct an encoding of any kind with sensible defaults for tests."""
     if key is None:
         key = jax.random.key(0)
@@ -35,7 +43,7 @@ def _build_encoding(cls, *, rank=3, num_freqs=8, num_bands=4, sigma=2.5, key=Non
     raise AssertionError(f"unknown encoding class {cls!r}")
 
 
-def test_identity_round_trips_coord():
+def test_identity_round_trips_coord() -> None:
     # Given: an Identity encoding and a coord
     # When: encoding
     # Then: the coord comes out unchanged and out_dim matches in_dim
@@ -46,7 +54,7 @@ def test_identity_round_trips_coord():
     assert jnp.array_equal(out, coord)
 
 
-def test_gaussian_forward_shape_and_finiteness():
+def test_gaussian_forward_shape_and_finiteness() -> None:
     # Given: a Gaussian encoding with rank=3, num_freqs=8, sigma=2.5
     # When: encoding a coord
     # Then: output shape is (2 * num_freqs,) and values are finite
@@ -60,7 +68,7 @@ def test_gaussian_forward_shape_and_finiteness():
     assert bool(jnp.all(jnp.abs(out) <= 1.0 + 1e-6))
 
 
-def test_gaussian_sigma_is_folded_into_B():
+def test_gaussian_sigma_is_folded_into_B() -> None:
     # Given: a Gaussian with large sigma
     # When: inspecting B's standard deviation
     # Then: it scales ~linearly with sigma. Documents the trade-off of the
@@ -72,7 +80,7 @@ def test_gaussian_sigma_is_folded_into_B():
     assert abs(float(jnp.std(enc.B)) - sigma) < sigma * 0.2
 
 
-def test_learned_gaussian_forward_shape_and_finiteness():
+def test_learned_gaussian_forward_shape_and_finiteness() -> None:
     # Given: a LearnedGaussian encoding
     # When: encoding a coord
     # Then: output shape is (2 * num_freqs,), values are finite, sigma is a scalar
@@ -85,7 +93,7 @@ def test_learned_gaussian_forward_shape_and_finiteness():
     assert enc.sigma.shape == ()
 
 
-def test_learned_gaussian_defaults_sigma_to_pi():
+def test_learned_gaussian_defaults_sigma_to_pi() -> None:
     # Given: LearnedGaussian with default sigma_init
     # When: inspecting sigma
     # Then: sigma equals pi to float32 precision (matches the prior
@@ -95,7 +103,7 @@ def test_learned_gaussian_defaults_sigma_to_pi():
     assert math.isclose(float(enc.sigma), math.pi, rel_tol=1e-6)
 
 
-def test_learned_gaussian_custom_sigma_init():
+def test_learned_gaussian_custom_sigma_init() -> None:
     # Given: LearnedGaussian with custom sigma_init
     # When: inspecting sigma
     # Then: sigma is the value passed in
@@ -103,7 +111,7 @@ def test_learned_gaussian_custom_sigma_init():
     assert float(enc.sigma) == 4.0
 
 
-def test_learned_gaussian_sigma_is_in_pytree_gaussian_is_not():
+def test_learned_gaussian_sigma_is_in_pytree_gaussian_is_not() -> None:
     # Given: a Gaussian and a LearnedGaussian encoding
     # When: partitioning via eqx.is_array
     # Then: LearnedGaussian's trainable leaves include sigma (a scalar);
@@ -127,7 +135,7 @@ def test_learned_gaussian_sigma_is_in_pytree_gaussian_is_not():
     assert shapes == [(), (4, 3)]
 
 
-def test_dyadic_forward_shape_and_finiteness():
+def test_dyadic_forward_shape_and_finiteness() -> None:
     # Given: a Dyadic encoding with rank=2, num_bands=4
     # When: encoding a coord
     # Then: output shape is (rank * 2 * num_bands,) = (16,) and values are finite
@@ -141,7 +149,7 @@ def test_dyadic_forward_shape_and_finiteness():
     assert bool(jnp.all(jnp.abs(out) <= 1.0 + 1e-6))
 
 
-def test_dyadic_default_num_bands_is_four():
+def test_dyadic_default_num_bands_is_four() -> None:
     # Given: Dyadic with no num_bands argument
     # When: inspecting num_bands
     # Then: default is 4 (matches the prior dyadic factory default L=4)
@@ -150,7 +158,7 @@ def test_dyadic_default_num_bands_is_four():
     assert enc.out_dim == 3 * 2 * 4
 
 
-def test_dyadic_bands_precomputed_as_pytree_leaf():
+def test_dyadic_bands_precomputed_as_pytree_leaf() -> None:
     # Given: a Dyadic encoding
     # When: inspecting bands and partitioning via eqx.is_array
     # Then: bands has shape (num_bands,) with values 2**k * pi for k in
@@ -167,7 +175,7 @@ def test_dyadic_bands_precomputed_as_pytree_leaf():
 
 
 @pytest.mark.parametrize("cls", ENCODING_CLASSES)
-def test_encoding_subclass_of_abc(cls):
+def test_encoding_subclass_of_abc(cls: type) -> None:
     # Given: each concrete encoding class
     # When: checking isinstance against the Encoding ABC
     # Then: each is an Encoding — downstream code can express "any encoding"
@@ -177,7 +185,7 @@ def test_encoding_subclass_of_abc(cls):
 
 
 @pytest.mark.parametrize("cls", ENCODING_CLASSES)
-def test_encoding_subclasses_compute_correct_forward(cls):
+def test_encoding_subclasses_compute_correct_forward(cls: type) -> None:
     # Given: an encoding of each class on a fixed coord
     # When: encoding
     # Then: output shape matches the encoding's reported out_dim and values
@@ -190,7 +198,7 @@ def test_encoding_subclasses_compute_correct_forward(cls):
     assert bool(jnp.all(jnp.isfinite(out)))
 
 
-def test_encoding_classes_are_disjoint_types():
+def test_encoding_classes_are_disjoint_types() -> None:
     # Given: one instance of each encoding class
     # When: collecting their types
     # Then: each is its own class — no shared discriminator, no shared
@@ -206,7 +214,7 @@ def test_encoding_classes_are_disjoint_types():
     assert classes == {Identity, Gaussian, LearnedGaussian, Dyadic}
 
 
-def test_non_gaussian_encodings_have_no_sigma_field():
+def test_non_gaussian_encodings_have_no_sigma_field() -> None:
     # Given: the non-Gaussian encoding classes
     # When: checking attribute presence
     # Then: only Gaussian/LearnedGaussian carry spectral-scale state.
@@ -217,28 +225,28 @@ def test_non_gaussian_encodings_have_no_sigma_field():
     assert not hasattr(Dyadic(rank=3), "B")
 
 
-def test_nyquist_sigma_uses_longest_axis():
+def test_nyquist_sigma_uses_longest_axis() -> None:
     # Given: shape (32, 1024) — longest axis is 1024
     # When: computing sigma
     # Then: sigma is (1024 - 1) / 4 = 255.75
     assert nyquist_sigma((32, 1024)) == (1024 - 1) / 4
 
 
-def test_nyquist_sigma_handles_4d_conv_kernel():
+def test_nyquist_sigma_handles_4d_conv_kernel() -> None:
     # Given: shape (3, 3, 1, 16) — longest axis is 16
     # When: computing sigma
     # Then: sigma is max(1, (16 - 1) / 4) = 3.75
     assert nyquist_sigma((3, 3, 1, 16)) == max(1.0, (16 - 1) / 4)
 
 
-def test_nyquist_sigma_floor_is_one():
+def test_nyquist_sigma_floor_is_one() -> None:
     # Given: a degenerate shape (1,) where (N-1)/4 = 0
     # When: computing sigma
     # Then: the 1.0 floor kicks in
     assert nyquist_sigma((1,)) == 1.0
 
 
-def test_nyquist_sigma_composes_with_gaussian():
+def test_nyquist_sigma_composes_with_gaussian() -> None:
     # Given: a Gaussian encoding constructed with sigma=nyquist_sigma(weight_shape)
     # When: inspecting B's std
     # Then: it scales to the Nyquist sigma. Documents the recommended usage

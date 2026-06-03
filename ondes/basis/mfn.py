@@ -29,7 +29,7 @@ https://github.com/boschresearch/multiplicative-filter-networks
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, Key
 
 from ondes.basis._base import Body, _validate_body_args
 
@@ -47,14 +47,22 @@ class FourierFilter(eqx.Module):
     W: Float[Array, "hidden in"]
     b: Float[Array, "hidden"]
 
-    def __init__(self, in_dim, hidden_dim, input_scale, n_layers, *, key):
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        input_scale: float,
+        n_layers: int,
+        *,
+        key: Key[Array, ""],
+    ) -> None:
         """Sample filter weights at ``input_scale / sqrt(n_layers + 1)`` and uniform-phase bias."""
         bound = input_scale / ((n_layers + 1.0) ** 0.5)
         kw, kb = jax.random.split(key)
         self.W = jax.random.uniform(kw, (hidden_dim, in_dim), minval=-bound, maxval=bound)
         self.b = jax.random.uniform(kb, (hidden_dim,), minval=-jnp.pi, maxval=jnp.pi)
 
-    def __call__(self, x):
+    def __call__(self, x: Float[Array, "in"]) -> Float[Array, "hidden"]:
         """Apply the sinusoidal filter pointwise."""
         return jnp.sin(self.W @ x + self.b)
 
@@ -76,7 +84,16 @@ class GaborFilter(eqx.Module):
     mu: Float[Array, "hidden in"]
     gamma: Float[Array, "hidden"]
 
-    def __init__(self, in_dim, hidden_dim, n_layers, *, key, alpha=6.0, beta=1.0):
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        n_layers: int,
+        *,
+        key: Key[Array, ""],
+        alpha: float = 6.0,
+        beta: float = 1.0,
+    ) -> None:
         """Sample mu uniformly in [-1, 1], gamma from Gamma(alpha/(n_layers+1), beta), and weights ~ N(0, gamma)."""
         k_mu, k_gamma, k_w, k_b = jax.random.split(key, 4)
         self.mu = jax.random.uniform(k_mu, (hidden_dim, in_dim), minval=-1.0, maxval=1.0)
@@ -89,7 +106,7 @@ class GaborFilter(eqx.Module):
         self.W = jax.random.normal(k_w, (hidden_dim, in_dim)) * std[:, None]
         self.b = jax.random.uniform(k_b, (hidden_dim,), minval=-jnp.pi, maxval=jnp.pi)
 
-    def __call__(self, x):
+    def __call__(self, x: Float[Array, "in"]) -> Float[Array, "hidden"]:
         """Apply the Gabor (sin * Gaussian envelope) filter pointwise."""
         diff = x[None, :] - self.mu  # (hidden_dim, in_dim)
         sq = jnp.sum(diff * diff, axis=-1)  # (hidden_dim,)
@@ -97,7 +114,12 @@ class GaborFilter(eqx.Module):
         return envelope * jnp.sin(self.W @ x + self.b)
 
 
-def _mfn_recurrence_init(in_dim, out_dim, weight_scale, key):
+def _mfn_recurrence_init(
+    in_dim: int,
+    out_dim: int,
+    weight_scale: float,
+    key: Key[Array, ""],
+) -> tuple[Float[Array, "out in"], Float[Array, "out"]]:
     """Uniform init for the recurrence-linear matrices ``(W_i, b_i)``.
 
     Bound ``sqrt(weight_scale / in_dim)`` matches the reference implementation.
@@ -124,11 +146,18 @@ class _MFNBody(Body):
     recurrence-linears alternate but live in different parameter families).
     """
 
-    filters: tuple
+    filters: tuple[FourierFilter | GaborFilter, ...]
     recurrence_W: Float[Array, "n_layers hidden hidden"]
     recurrence_b: Float[Array, "n_layers hidden"]
 
-    def _build_recurrence(self, num_hidden_layers, hidden_dim, weight_scale, keys):
+    def _build_recurrence(
+        self,
+        num_hidden_layers: int,
+        hidden_dim: int,
+        weight_scale: float,
+        keys: Key[Array, "n_layers"],
+    ) -> tuple[Float[Array, "n_layers hidden hidden"], Float[Array, "n_layers hidden"]]:
+        """Stack ``num_hidden_layers`` recurrence-linear ``(W, b)`` pairs along axis 0."""
         Ws = []
         bs = []
         for i in range(num_hidden_layers):
@@ -137,7 +166,12 @@ class _MFNBody(Body):
             bs.append(b)
         return jnp.stack(Ws), jnp.stack(bs)
 
-    def trunk(self, coord, *, film=None):
+    def trunk(
+        self,
+        coord: Float[Array, "in"],
+        *,
+        film: Float[Array, "n_layers two_hidden"] | None = None,
+    ) -> Float[Array, "hidden"]:
         """MFN multiplicative-composition recurrence over filters.
 
         ``film`` is applied per recurrence step (i.e. to the post-(W_i z + b_i)
@@ -174,15 +208,15 @@ class FourierMFN(_MFNBody):
 
     def __init__(
         self,
-        in_dim,
-        hidden_dim,
-        num_hidden_layers,
+        in_dim: int,
+        hidden_dim: int,
+        num_hidden_layers: int,
         *,
-        key,
-        out_features=None,
-        input_scale=256.0,
-        weight_scale=1.0,
-    ):
+        key: Key[Array, ""],
+        out_features: int | None = None,
+        input_scale: float = 256.0,
+        weight_scale: float = 1.0,
+    ) -> None:
         """Initialise ``num_hidden_layers + 1`` Fourier filters and the recurrence stack.
 
         Args:
@@ -234,16 +268,16 @@ class GaborMFN(_MFNBody):
 
     def __init__(
         self,
-        in_dim,
-        hidden_dim,
-        num_hidden_layers,
+        in_dim: int,
+        hidden_dim: int,
+        num_hidden_layers: int,
         *,
-        key,
-        out_features=None,
-        alpha=6.0,
-        beta=1.0,
-        weight_scale=1.0,
-    ):
+        key: Key[Array, ""],
+        out_features: int | None = None,
+        alpha: float = 6.0,
+        beta: float = 1.0,
+        weight_scale: float = 1.0,
+    ) -> None:
         """Initialise ``num_hidden_layers + 1`` Gabor filters and the recurrence stack.
 
         Args:

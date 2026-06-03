@@ -31,7 +31,7 @@ _BODY_CLASSES = (
 )
 
 
-def _build(body_cls):
+def _build(body_cls: type[ondes.Body]) -> ondes.Body:
     """Construct a tiny instance with the kwargs each body's __init__ accepts.
 
     Each class has its own constructor surface, so we instantiate per-cls
@@ -46,7 +46,7 @@ def _build(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", _BODY_CLASSES)
-def test_trunk_rejects_film_of_wrong_shape(body_cls):
+def test_trunk_rejects_film_of_wrong_shape(body_cls: type[ondes.Body]) -> None:
     # Given: a tiny body of one of the nine shipped basis kinds; a coord;
     # and a FiLM tensor whose shape disagrees with the expected
     # (num_hidden_layers, 2 * hidden_dim) = (2, 16). Use (3, 16) as the
@@ -64,7 +64,7 @@ def test_trunk_rejects_film_of_wrong_shape(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", _BODY_CLASSES)
-def test_trunk_rejects_film_of_wrong_trailing_dim(body_cls):
+def test_trunk_rejects_film_of_wrong_trailing_dim(body_cls: type[ondes.Body]) -> None:
     # Given: a body and a FiLM whose trailing axis is wrong (not 2*hidden_dim).
     # When/Then: still raises — covers the "split gamma | beta" assumption,
     # not just the leading-axis count.
@@ -77,7 +77,7 @@ def test_trunk_rejects_film_of_wrong_trailing_dim(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", _BODY_CLASSES)
-def test_trunk_accepts_well_shaped_film(body_cls):
+def test_trunk_accepts_well_shaped_film(body_cls: type[ondes.Body]) -> None:
     # Given: a body and a FiLM with the contract-conformant shape.
     # When: calling trunk
     # Then: returns hidden features without raising — the check is

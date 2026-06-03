@@ -14,7 +14,7 @@ MFN_CLASSES = (FourierMFN, GaborMFN)
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_conforms_to_basis_module_and_body(body_cls):
+def test_mfn_body_conforms_to_basis_module_and_body(body_cls: type) -> None:
     # Given: an MFN body of each kind
     # When: checking the structural and nominal type contracts
     # Then: each is a BasisModule (Protocol) and a Body (concrete base) — so
@@ -26,7 +26,7 @@ def test_mfn_body_conforms_to_basis_module_and_body(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_forward_scalar_shape(body_cls):
+def test_mfn_body_forward_scalar_shape(body_cls: type) -> None:
     # Given: a default-out MFN body
     # When: forward-passing
     # Then: output is a 0-d scalar
@@ -36,7 +36,7 @@ def test_mfn_body_forward_scalar_shape(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_forward_vector_shape(body_cls):
+def test_mfn_body_forward_vector_shape(body_cls: type) -> None:
     # Given: an out_features=4 MFN body
     # When: forward-passing
     # Then: output is shape (4,)
@@ -46,7 +46,7 @@ def test_mfn_body_forward_vector_shape(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_trunk_shape(body_cls):
+def test_mfn_body_trunk_shape(body_cls: type) -> None:
     # Given: an MFN body
     # When: calling trunk()
     # Then: shape is (hidden_dim,) (the recurrence carries hidden-dim state)
@@ -56,7 +56,7 @@ def test_mfn_body_trunk_shape(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_film_modulation_changes_output(body_cls):
+def test_mfn_body_film_modulation_changes_output(body_cls: type) -> None:
     # Given: an MFN body run with and without FiLM
     # When: passing a non-trivial FiLM tensor
     # Then: outputs differ — FiLM gates the recurrence-linear output at every step.
@@ -70,7 +70,7 @@ def test_mfn_body_film_modulation_changes_output(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_jit_matches_eager(body_cls):
+def test_mfn_body_jit_matches_eager(body_cls: type) -> None:
     # Given: an MFN body and a coordinate
     # When: jit-compiling the call
     # Then: jit-compiled output matches eager
@@ -82,7 +82,7 @@ def test_mfn_body_jit_matches_eager(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_grad_is_finite_and_nonzero(body_cls):
+def test_mfn_body_grad_is_finite_and_nonzero(body_cls: type) -> None:
     # Given: an MFN body and a sum-loss
     # When: taking grad over the body
     # Then: gradient pytree leaves are finite and at least one carries signal
@@ -101,7 +101,7 @@ def test_mfn_body_grad_is_finite_and_nonzero(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_vmap_over_coords(body_cls):
+def test_mfn_body_vmap_over_coords(body_cls: type) -> None:
     # Given: a batch of coords
     # When: vmapping the MFN call
     # Then: output shape carries the batch axis
@@ -112,7 +112,7 @@ def test_mfn_body_vmap_over_coords(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_canonicalises_out_features_one(body_cls):
+def test_mfn_body_canonicalises_out_features_one(body_cls: type) -> None:
     # Given: two bodies differing only in out_features=None vs 1
     # When: comparing pytree structure
     # Then: identical (canonicalisation rule applies)
@@ -123,7 +123,7 @@ def test_mfn_body_canonicalises_out_features_one(body_cls):
 
 
 @pytest.mark.parametrize("body_cls", MFN_CLASSES)
-def test_mfn_body_rejects_zero_hidden_layers(body_cls):
+def test_mfn_body_rejects_zero_hidden_layers(body_cls: type) -> None:
     # Given: a 0-recurrence-step request
     # When: constructing
     # Then: constructor rejects
@@ -131,7 +131,7 @@ def test_mfn_body_rejects_zero_hidden_layers(body_cls):
         body_cls(in_dim=2, hidden_dim=8, num_hidden_layers=0, key=jax.random.key(0))
 
 
-def test_fourier_mfn_has_n_plus_one_filters():
+def test_fourier_mfn_has_n_plus_one_filters() -> None:
     # Given: a FourierMFN with num_hidden_layers=4
     # When: counting filters
     # Then: there are 5 (= num_hidden_layers + 1) — the recurrence is
@@ -144,7 +144,7 @@ def test_fourier_mfn_has_n_plus_one_filters():
         assert isinstance(f, FourierFilter)
 
 
-def test_gabor_mfn_has_n_plus_one_filters_of_gabor_type():
+def test_gabor_mfn_has_n_plus_one_filters_of_gabor_type() -> None:
     # Given: a GaborMFN
     # When: inspecting the filter list
     # Then: every filter is a GaborFilter (catches a type-dispatch regression
@@ -155,7 +155,7 @@ def test_gabor_mfn_has_n_plus_one_filters_of_gabor_type():
         assert isinstance(f, GaborFilter)
 
 
-def test_fourier_filter_bias_uniform_phase():
+def test_fourier_filter_bias_uniform_phase() -> None:
     # Given: a FourierFilter with many output units
     # When: checking the bias range
     # Then: every bias is in [-pi, pi] — the uniform-phase init is the paper's
@@ -168,7 +168,7 @@ def test_fourier_filter_bias_uniform_phase():
     assert abs(float(jnp.mean(f.b))) < 0.2
 
 
-def test_fourier_filter_weight_scale_matches_paper_formula():
+def test_fourier_filter_weight_scale_matches_paper_formula() -> None:
     # Given: a FourierFilter with known input_scale and n_layers
     # When: drawing many filter weights
     # Then: |W| <= input_scale / sqrt(n_layers + 1) exactly (uniform bound)
@@ -178,7 +178,7 @@ def test_fourier_filter_weight_scale_matches_paper_formula():
     assert float(jnp.max(jnp.abs(f.W))) <= float(expected) + 1e-5
 
 
-def test_gabor_filter_mu_within_unit_box():
+def test_gabor_filter_mu_within_unit_box() -> None:
     # Given: a GaborFilter
     # When: inspecting the centres
     # Then: all mu values are in [-1, 1] (the paper's prior).
@@ -187,7 +187,7 @@ def test_gabor_filter_mu_within_unit_box():
     assert float(jnp.max(g.mu)) <= 1.0 + 1e-5
 
 
-def test_gabor_filter_gamma_is_strictly_positive():
+def test_gabor_filter_gamma_is_strictly_positive() -> None:
     # Given: a GaborFilter (gamma is a Gamma-distributed scale parameter)
     # When: inspecting gamma
     # Then: every entry is strictly positive — negative gamma would invert the
@@ -197,7 +197,7 @@ def test_gabor_filter_gamma_is_strictly_positive():
     assert bool(jnp.all(g.gamma > 0))
 
 
-def test_fourier_mfn_no_unused_omega_field_on_filter():
+def test_fourier_mfn_no_unused_omega_field_on_filter() -> None:
     # Given: a FourierFilter
     # When: inspecting its fields
     # Then: it carries (W, b) only — no omega leaf, because the filter
@@ -209,7 +209,7 @@ def test_fourier_mfn_no_unused_omega_field_on_filter():
     assert len(leaves) == 2
 
 
-def test_recurrence_state_stacked_along_axis_0():
+def test_recurrence_state_stacked_along_axis_0() -> None:
     # Given: a FourierMFN with num_hidden_layers=4
     # When: inspecting the recurrence-linear arrays
     # Then: the W stack has shape (num_hidden_layers, hidden_dim, hidden_dim).

@@ -28,13 +28,19 @@ returns per scale; that's downstream-policy territory and can live as an
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, Key, PyTree
 
 from ondes.basis._base import Body, _validate_body_args
 from ondes.basis.mfn import _mfn_recurrence_init
 
 
-def _bacon_filter_freqs(in_dim, hidden_dim, bandwidth, quantization_interval, key):
+def _bacon_filter_freqs(
+    in_dim: int,
+    hidden_dim: int,
+    bandwidth: float,
+    quantization_interval: float,
+    key: Key[Array, ""],
+) -> Float[Array, "hidden in"]:
     """Sample integer multiples of ``quantization_interval`` in ``[-bandwidth, bandwidth]``.
 
     Returns an ``(hidden_dim, in_dim)`` array of filter frequencies for one
@@ -73,13 +79,21 @@ class BACONFilter(eqx.Module):
     W: Float[Array, "hidden in"]
     b: Float[Array, "hidden"]
 
-    def __init__(self, in_dim, hidden_dim, bandwidth, quantization_interval, *, key):
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        bandwidth: float,
+        quantization_interval: float,
+        *,
+        key: Key[Array, ""],
+    ) -> None:
         """Sample fixed quantised frequencies and a uniform-phase learnable bias."""
         k_freq, k_bias = jax.random.split(key)
         self.W = _bacon_filter_freqs(in_dim, hidden_dim, bandwidth, quantization_interval, k_freq)
         self.b = jax.random.uniform(k_bias, (hidden_dim,), minval=-jnp.pi, maxval=jnp.pi)
 
-    def __call__(self, x):
+    def __call__(self, x: Float[Array, "in"]) -> Float[Array, "hidden"]:
         """Apply the band-limited sinusoidal filter pointwise."""
         return jnp.sin(self.W @ x + self.b)
 
@@ -118,23 +132,23 @@ class BACON(Body):
         downstream code can use directly.
     """
 
-    filters: tuple
+    filters: tuple[BACONFilter, ...]
     recurrence_W: Float[Array, "n_layers hidden hidden"]
     recurrence_b: Float[Array, "n_layers hidden"]
     bandwidths: Float[Array, "n_filters"]
 
     def __init__(
         self,
-        in_dim,
-        hidden_dim,
-        num_hidden_layers,
+        in_dim: int,
+        hidden_dim: int,
+        num_hidden_layers: int,
         *,
-        key,
-        out_features=None,
-        max_freq=256.0,
-        quantization_interval=None,
-        weight_scale=1.0,
-    ):
+        key: Key[Array, ""],
+        out_features: int | None = None,
+        max_freq: float = 256.0,
+        quantization_interval: float | None = None,
+        weight_scale: float = 1.0,
+    ) -> None:
         """Initialise band-limited filters at the paper-recommended per-layer cap."""
         out_features = _validate_body_args(num_hidden_layers, out_features)
         if quantization_interval is None:
@@ -189,7 +203,7 @@ class BACON(Body):
         """
         return jnp.sum(self.bandwidths)
 
-    def fix_filters_mask(self):
+    def fix_filters_mask(self) -> PyTree:
         """Return a pytree mask that selects only the learnable leaves.
 
         Use with ``eqx.partition(body, body.fix_filters_mask())`` to split the
@@ -214,7 +228,12 @@ class BACON(Body):
         mask = eqx.tree_at(lambda b: b.filters, mask, new_filters)
         return eqx.tree_at(lambda b: b.bandwidths, mask, False)
 
-    def trunk(self, coord, *, film=None):
+    def trunk(
+        self,
+        coord: Float[Array, "in"],
+        *,
+        film: Float[Array, "n_layers two_hidden"] | None = None,
+    ) -> Float[Array, "hidden"]:
         """BACON multiplicative recurrence — identical shape to MFN's.
 
         Inherits the same FiLM convention: the first filter is unmodulated;

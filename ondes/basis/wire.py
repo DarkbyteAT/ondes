@@ -10,7 +10,7 @@ Init scheme is inherited from SIREN (see ``ondes.basis.siren.siren_init``).
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, Key
 
 from ondes.basis._base import Basis, Body, _validate_body_args
 from ondes.basis.siren import _build_readout, siren_init
@@ -26,13 +26,23 @@ class WIRELayer(Basis):
 
     s: Float[Array, ""]
 
-    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key, s_init=3.0):
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        omega_init: float,
+        is_first: bool,
+        *,
+        key: Key[Array, ""],
+        s_init: float = 3.0,
+    ) -> None:
         """Initialise the linear weights, ``omega``, and the WIRE-specific ``s``."""
         self.W, self.b = siren_init(in_dim, out_dim, omega_init, is_first, key)
         self.omega = jnp.array(float(omega_init))
         self.s = jnp.array(float(s_init))
 
-    def _activate(self, pre):
+    def _activate(self, pre: Float[Array, "out"]) -> Float[Array, "out"]:
+        """Apply ``cos(omega * pre) * exp(-(s * pre) ** 2)`` pointwise."""
         sz = self.s * pre
         return jnp.cos(self.omega * pre) * jnp.exp(-(sz * sz))
 
@@ -46,16 +56,16 @@ class WIRE(Body):
 
     def __init__(
         self,
-        in_dim,
-        hidden_dim,
-        num_hidden_layers,
+        in_dim: int,
+        hidden_dim: int,
+        num_hidden_layers: int,
         *,
-        key,
-        out_features=None,
-        omega_first=6.0,
-        omega_hidden=1.0,
-        s_init=3.0,
-    ):
+        key: Key[Array, ""],
+        out_features: int | None = None,
+        omega_first: float = 6.0,
+        omega_hidden: float = 1.0,
+        s_init: float = 3.0,
+    ) -> None:
         """Initialise the WIRE body MLP.
 
         Args:

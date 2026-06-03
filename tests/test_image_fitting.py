@@ -23,7 +23,7 @@ from examples.fit_image import Model, loss_fn, synthetic_target, train
 
 
 @pytest.mark.parametrize("target_name", ["sinusoid", "gaussian_bump", "mandelbrot"])
-def test_siren_fits_synthetic_target(target_name):
+def test_siren_fits_synthetic_target(target_name: str) -> None:
     # Given: one of the three synthetic targets, evaluated on a small 16x16
     # grid; a SIREN with the same defaults as the `siren` subcommand uses
     # (hidden=64, layers=3, ω=30); Adam at lr=1e-3 for 200 steps (the CLI
@@ -45,7 +45,7 @@ def test_siren_fits_synthetic_target(target_name):
     )
 
 
-def test_train_on_step_labels_match_parameter_state():
+def test_train_on_step_labels_match_parameter_state() -> None:
     # Given: a tiny SIREN, the sinusoid target, and a 2-step train at chunk_size=2
     # so the entire run is one scan + one final-loss forward pass. The captured
     # on_step calls should be exactly:
@@ -107,7 +107,7 @@ def test_train_on_step_labels_match_parameter_state():
     )
 
 
-def test_train_rejects_steps_not_divisible_by_chunk_size():
+def test_train_rejects_steps_not_divisible_by_chunk_size() -> None:
     # Given: a tiny model and a request for 250 steps in chunks of 100.
     # The scan loop would run (steps // chunk_size) * chunk_size = 200 Adam
     # steps and then emit on_step(steps=250, final_loss), mislabelling the
@@ -128,7 +128,7 @@ def test_train_rejects_steps_not_divisible_by_chunk_size():
     assert "250" in msg and "100" in msg, f"expected both 250 and 100 in error message, got: {msg!r}"
 
 
-def test_train_rejects_non_positive_steps():
+def test_train_rejects_non_positive_steps() -> None:
     # Given: a tiny model and a `steps=0` (or negative) request. The naive
     # `n_chunks = steps // chunk_size` would skip the loop, but the post-loop
     # `on_step(steps, final_loss)` would still fire — emitting a duplicate of

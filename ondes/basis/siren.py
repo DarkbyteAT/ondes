@@ -10,11 +10,18 @@ init for RFF) should own their own.
 
 import jax
 import jax.numpy as jnp
+from jaxtyping import Array, Float, Key
 
 from ondes.basis._base import Basis, Body, _validate_body_args
 
 
-def siren_init(in_dim, out_dim, omega, is_first, key):
+def siren_init(
+    in_dim: int,
+    out_dim: int,
+    omega: float,
+    is_first: bool,
+    key: Key[Array, ""],
+) -> tuple[Float[Array, "out in"], Float[Array, "out"]]:
     """Sample ``(W, b)`` under the SIREN initialisation scheme.
 
     First-layer weights are drawn uniformly from ``[-1/in_dim, 1/in_dim]``;
@@ -38,12 +45,27 @@ def siren_init(in_dim, out_dim, omega, is_first, key):
     return W, b
 
 
-def _build_readout(hidden_dim, omega_hidden, out_features, key):
+def _build_readout(
+    hidden_dim: int,
+    omega_hidden: float,
+    out_features: int | None,
+    key: Key[Array, ""],
+) -> tuple[Float[Array, "out hidden"], Float[Array, "out"]]:
     """Sample SIREN-style readout weights.
 
     Shared by SIREN/H-SIREN/WIRE because they all share the SIREN-family
     activation-variance assumption. New basis families (MFN, RFF, …) should
     write their own readout init if they use a different scheme.
+
+    Args:
+        hidden_dim: Width feeding into the readout.
+        omega_hidden: Last hidden layer's ``omega`` (sets the variance bound).
+        out_features: Readout width; ``None`` collapses to ``1``.
+        key: JAX PRNG key.
+
+    Returns:
+        Tuple ``(W, b)`` shaped ``(out_dim, hidden_dim)`` and ``(out_dim,)``,
+        where ``out_dim == 1`` when ``out_features is None`` else ``out_features``.
     """
     # Bound applies per-output-component; independent of out_features.
     bound = jnp.sqrt(6.0 / hidden_dim) / max(omega_hidden, 1e-3)
@@ -60,7 +82,15 @@ class SIRENLayer(Basis):
     # Explicit pass-through __init__ so pyright sees concrete signatures on
     # subclasses (eqx.Module + ABC machinery confuses static analysis).
     # DO NOT delete — see DECISIONS.md §"Polymorphism over discriminators".
-    def __init__(self, in_dim, out_dim, omega_init, is_first, *, key):
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        omega_init: float,
+        is_first: bool,
+        *,
+        key: Key[Array, ""],
+    ) -> None:
         """Initialise the linear weights and the learnable ``omega``.
 
         ``is_first`` is a construction-only kwarg consumed by :func:`siren_init`
@@ -74,7 +104,8 @@ class SIRENLayer(Basis):
         self.W, self.b = siren_init(in_dim, out_dim, omega_init, is_first, key)
         self.omega = jnp.array(float(omega_init))
 
-    def _activate(self, pre):
+    def _activate(self, pre: Float[Array, "out"]) -> Float[Array, "out"]:
+        """Apply ``sin(omega * pre)`` pointwise."""
         return jnp.sin(self.omega * pre)
 
 
@@ -83,15 +114,15 @@ class SIREN(Body):
 
     def __init__(
         self,
-        in_dim,
-        hidden_dim,
-        num_hidden_layers,
+        in_dim: int,
+        hidden_dim: int,
+        num_hidden_layers: int,
         *,
-        key,
-        out_features=None,
-        omega_first=6.0,
-        omega_hidden=1.0,
-    ):
+        key: Key[Array, ""],
+        out_features: int | None = None,
+        omega_first: float = 6.0,
+        omega_hidden: float = 1.0,
+    ) -> None:
         """Initialise the SIREN body MLP.
 
         Args:

@@ -19,12 +19,16 @@ to the ReLU non-linearity; biases are zeroed.
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, Key, PyTree
 
 from ondes.basis._base import Basis, Body, _validate_body_args
 
 
-def _kaiming_uniform_relu(in_dim, out_dim, key):
+def _kaiming_uniform_relu(
+    in_dim: int,
+    out_dim: int,
+    key: Key[Array, ""],
+) -> tuple[Float[Array, "out in"], Float[Array, "out"]]:
     """Kaiming-uniform init for a ReLU-followed linear layer.
 
     Bound is ``sqrt(6 / in_dim)``, the He (Kaiming) bound that keeps activation
@@ -48,12 +52,13 @@ class RFFLayer(Basis):
     pytree doesn't have to special-case RFF.
     """
 
-    def __init__(self, in_dim, out_dim, *, key):
+    def __init__(self, in_dim: int, out_dim: int, *, key: Key[Array, ""]) -> None:
         """Initialise the linear weights (Kaiming-uniform) and a unit ``omega`` placeholder."""
         self.W, self.b = _kaiming_uniform_relu(in_dim, out_dim, key)
         self.omega = jnp.array(1.0)
 
-    def _activate(self, pre):
+    def _activate(self, pre: Float[Array, "out"]) -> Float[Array, "out"]:
+        """Apply a pointwise ReLU."""
         return jax.nn.relu(pre)
 
 
@@ -92,15 +97,15 @@ class RFF(Body):
 
     def __init__(
         self,
-        in_dim,
-        hidden_dim,
-        num_hidden_layers,
+        in_dim: int,
+        hidden_dim: int,
+        num_hidden_layers: int,
         *,
-        key,
-        out_features=None,
-        num_freqs=256,
-        sigma=10.0,
-    ):
+        key: Key[Array, ""],
+        out_features: int | None = None,
+        num_freqs: int = 256,
+        sigma: float = 10.0,
+    ) -> None:
         """Initialise the encoding's ``B`` matrix and the ReLU-MLP layers + readout."""
         out_features = _validate_body_args(num_hidden_layers, out_features)
         k_enc, *rest = jax.random.split(key, num_hidden_layers + 2)
@@ -120,7 +125,7 @@ class RFF(Body):
         self.hidden_dim = hidden_dim
         self.num_hidden_layers = num_hidden_layers
 
-    def fix_encoding_mask(self):
+    def fix_encoding_mask(self) -> PyTree:
         """Return a pytree mask that selects only the learnable (non-encoding-B) leaves.
 
         Use with ``eqx.partition(body, body.fix_encoding_mask())`` to split the
@@ -133,11 +138,17 @@ class RFF(Body):
         mask = jax.tree_util.tree_map(lambda x: eqx.is_array(x), self)
         return eqx.tree_at(lambda b: b.B, mask, False)
 
-    def _encode(self, coord):
+    def _encode(self, coord: Float[Array, "in"]) -> Float[Array, "two_num_freqs"]:
+        """Project ``coord`` onto sampled Fourier features ``[cos(2*pi*B@coord), sin(2*pi*B@coord)]``."""
         angles = 2.0 * jnp.pi * (self.B @ coord)
         return jnp.concatenate([jnp.cos(angles), jnp.sin(angles)])
 
-    def trunk(self, coord, *, film=None):
+    def trunk(
+        self,
+        coord: Float[Array, "in"],
+        *,
+        film: Float[Array, "n_layers two_hidden"] | None = None,
+    ) -> Float[Array, "hidden"]:
         """Apply Fourier-feature encoding then the ReLU MLP.
 
         ``film`` is threaded layer-by-layer through the MLP exactly as in the
