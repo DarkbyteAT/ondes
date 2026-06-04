@@ -119,12 +119,18 @@ def load_timing(basis: str) -> dict[str, float] | None:
 
     Written by ``examples/fit_image.py``'s ``_train_and_save`` for runs that
     instrument compile-vs-steady timing. Returns ``None`` for older run dirs
-    so the aggregator can fall back to the legacy total-only `_wallclock.txt`.
+    so the aggregator can fall back to the legacy total-only `_wallclock.txt`,
+    and for truncated/corrupt files so a partially-written `timing.json`
+    doesn't take the whole aggregation down with it.
     """
     path = RUN_DIR / basis / "timing.json"
     if not path.exists():
         return None
-    return json.loads(path.read_text())
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        print(f"WARNING: timing.json for basis '{basis}' is malformed ({exc}); falling back to _wallclock.txt.")
+        return None
 
 
 def write_results_csv(rows: list[dict]) -> None:

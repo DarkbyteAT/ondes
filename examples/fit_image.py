@@ -490,6 +490,11 @@ def _train_and_save(
     (output_dir / "config.json").write_text(json.dumps(config, indent=2))
 
     csv_path = output_dir / "loss.csv"
+    # Write the CSV under a `.partial` name and rename to `loss.csv` only on
+    # clean exit, so a crashed basis leaves no `loss.csv` for the aggregator
+    # to mistake for a finished run. The aggregator's existing missing-CSV
+    # skip-with-warning path then catches the crash cleanly.
+    csv_partial_path = output_dir / "loss.csv.partial"
     curve_path = output_dir / "loss_curve.svg"
     gif_path = output_dir / "recon_evolution.gif"
     snapshot_paths: list[Path] = []
@@ -503,7 +508,7 @@ def _train_and_save(
     # Open CSV once and write header; per-step appends share the handle. Faster
     # than re-opening per step, and `flush()` per row keeps `tail -f` live. The
     # `with` block guarantees the handle closes even if training raises.
-    with csv_path.open("w", newline="") as csv_file:
+    with csv_partial_path.open("w", newline="") as csv_file:
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow(["step", "loss", "psnr_db"])
 
@@ -558,6 +563,10 @@ def _train_and_save(
             on_step=on_step,
             on_chunk=on_chunk,
         )
+    # Training finished cleanly — promote the partial CSV to its final name.
+    # If `train(...)` had raised, the rename never runs and the aggregator
+    # sees a missing `loss.csv` (its existing skip-with-warning path).
+    csv_partial_path.replace(csv_path)
     # PSNR assumes amplitudes are in [0, 1] (images) or roughly so (synthetics in [-1, 1]).
     # For [-1, 1] targets MSE→PSNR uses peak=2; we report peak=1 PSNR consistently and
     # note the convention. Sitzmann+ 2020 reports peak=1 PSNR on normalised images.
@@ -570,6 +579,12 @@ def _train_and_save(
     # can extrapolate per-step from. Reporting both separately lets the
     # writeup's per-step inferences cite the steady number while the
     # methodology section names the compile overhead honestly.
+    #
+    # Boundary: `compile_s` captures only the `run_chunk` JIT compile (first
+    # `chunk_size` Adam steps). The per-call `jitted_loss` compile is paid
+    # silently in `initial_loss = float(jitted_loss(...))` before training
+    # and is excluded by design — the writeup's wall-clock disclosure names
+    # this gap.
     compile_s = chunk_times[0] if chunk_times else 0.0
     steady_s = sum(chunk_times[1:]) if len(chunk_times) > 1 else 0.0
     total_s = sum(chunk_times)

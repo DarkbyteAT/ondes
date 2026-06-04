@@ -7,11 +7,9 @@ fitting a single image at each basis's paper-default hyperparameters.
 
 SIREN wins **at paper-default hyperparameters on this single seed** —
 34.23 dB final PSNR, 120 s total wall-clock (114 s steady-state +
-6 s one-time JIT compile) — with H-SIREN indistinguishable from
-it at 34.20 dB (0.03 dB gap). Everything else lands at least 8 dB
-lower: WIRE 25.53, Fourier-MFN 23.36, PNF 21.74, BACON 20.91, RFF
-18.07, Gabor-MFN 15.53, and FINER bottoms out at 13.05 dB despite
-being a SIREN extension. The ranking is faithful to "out-of-the-box at
+6 s one-time JIT compile) — with H-SIREN within 0.03 dB at 34.20 dB.
+The rest of the field is 8-21 dB behind (see the results table), with
+FINER bottoming out at 13.05 dB despite being a SIREN extension. The ranking is faithful to "out-of-the-box at
 paper defaults on one seed" and should be read as such, not as a
 verdict on the architectures themselves; per-basis hyperparameter
 tuning and seed averaging would almost certainly reshape it (FINER in
@@ -54,19 +52,24 @@ reshuffle the ranking (cf. the FINER note below).
 
 **Wall-clock decomposition.** Each per-basis fit reports three timings
 in `runs/sweep-arch/<basis>/timing.json`: `compile_s` is the wall-clock
-spent on the first `jax.jit`-traced training chunk (one-time XLA
-lowering + compile), `steady_s` is the wall-clock for the remaining 19
-chunks (950 steps of warm-cache training), and `total_s` is their sum
-plus aggregator bookkeeping. Per-step training cost is `steady_s / 950`;
-`compile_s` is a fixed overhead that amortises across longer training
-runs. Discussions of per-step speed in the per-basis notes and
-conclusion cite `steady_s`.
+spent on the first `jax.jit`-traced training chunk (one-time JAX trace
++ compile), `steady_s` is the wall-clock for the remaining 19 chunks
+(19 × 50 = 950 steps of warm-cache training; the first chunk's 50
+steps are counted under `compile_s`, not `steady_s`), and `total_s` is
+their sum plus aggregator bookkeeping. Per-step training cost is
+`steady_s / 950`; `compile_s` is a fixed overhead that amortises
+across longer training runs. Discussions of per-step speed in the
+per-basis notes and conclusion cite `steady_s`. These three numbers
+exclude artifact I/O (snapshot PNGs, GIF rebuilds, final recon write)
+and the one-time `loss_fn` JIT compile paid in `initial_loss` before
+training starts — the end-to-end driver wall-clock for one basis is
+roughly 10-15% higher than `total_s`.
 
-**Box-Muller PRNG-stream fingerprint.** The numbers in this table
+**Box-Muller swap affects only RFF.** The numbers in this table
 reflect the Box-Muller Gaussian sampler from PR #15. Only RFF reads
 from `jax.random.normal` (B-matrix init), so only RFF's number moves
 under the swap: RFF goes from 18.34 dB (the prior `jax.random.normal`
-run) to 18.07 dB here, and every other basis's final PSNR is byte-
+run) to 18.07 dB here, and every other basis's final PSNR is
 identical to two decimal places across the two runs. RFF's ranking
 position is unchanged.
 
@@ -77,7 +80,12 @@ not a natural-image fit, so it has no meaningful place in this comparison.
 ## Results
 
 `Compile (s)` is the one-time JIT compile of the first scan chunk;
-`Steady (s)` is the remaining 950 steps; `Total (s)` is their sum.
+`Steady (s)` is the remaining 950 steps; `Total (s)` is their sum
+plus aggregator bookkeeping, rounded to the nearest second (the
+unrounded float is `timing.json.total_s`). Total reflects only what
+the timing block sees: the end-to-end wall-clock observed from the
+shell is roughly 10-15% higher per the artifact-I/O disclosure in
+the methodology block above.
 
 | Basis        | Paper            | Final PSNR (dB) | Final MSE   | Compile (s) | Steady (s) | Total (s) | Notes                                              |
 | ------------ | ---------------- | --------------: | ----------: | ----------: | ---------: | --------: | -------------------------------------------------- |
@@ -88,7 +96,7 @@ not a natural-image fit, so it has no meaningful place in this comparison.
 | pnf          | Yang+ 2022       |           21.74 |   6.704e-03 |       10.29 |     185.61 |       196 |                                                    |
 | bacon        | Lindell+ 2022    |           20.91 |   8.117e-03 |        9.56 |     183.78 |       193 | output bandwidth aliasing at hidden=128            |
 | rff          | Tancik+ 2020     |           18.07 |   1.561e-02 |        9.91 |     195.00 |       205 | paper `sigma=10, lr=1e-4` underconverges in 1000 s |
-| gabor-mfn    | Fathony+ 2021    |           15.53 |   2.802e-02 |       22.84 |     417.38 |       440 | recurrence is slowest per-step                     |
+| gabor-mfn    | Fathony+ 2021    |           15.53 |   2.802e-02 |       22.84 |     417.38 |       440 | recurrence is slowest per-step and slowest to compile |
 | finer        | Liu+ 2024        |           13.05 |   4.954e-02 |        7.54 |     142.95 |       150 | seed-fragile: this seed lands far from a good init |
 
 Numbers sorted by final PSNR descending. The same data is in
@@ -104,9 +112,11 @@ gitignored — regenerate them locally with `bash scripts/sweep_astronaut.sh`.
 **siren** (Sitzmann+ 2020). Sinusoidal periodic activations with
 weight-init scaled by `omega=30`. Paper defaults `omega=30, lr=5e-4`.
 First place. The reference benchmark for natural-image INR fits and
-the basis everything else is implicitly compared against — losing
-to SIREN by less than a dB is a tie; losing by more than 5 dB is a
-sign the basis isn't suited to this regime.
+the basis everything else is implicitly compared against. Gaps under
+a dB at one seed are below the resolution of this sweep — they could
+flip sign under another seed or another paper-default PRNG
+fingerprint. Gaps over 5 dB are too large to attribute to seed
+alone and signal something basis- or hparam-specific.
 
 **hsiren** (Cai & Pan 2024). SIREN extended by a `sinh` pre-modulation
 that lets the first layer reach higher frequencies than SIREN's bandlimit.
@@ -118,10 +128,11 @@ data. Would expect H-SIREN to pull ahead on higher-frequency targets
 **wire** (Saragadam+ 2023). Gabor wavelet activation
 `sin(ω·z) · exp(-σ²·z²)` combining oscillation and a Gaussian
 envelope. Paper defaults `omega=10, s_init=10, lr=1e-3`. Third place
-at 25.53 dB. A discarded jax-mps run of the same hparams landed at
-13 dB; the 12 dB gap is unexplained and not pursued — could be
-backend numerics, PRNG-stream differences across plugins, or
-basin sensitivity to either of those. The mlx number is the honest
+at 25.53 dB. A discarded jax-mps (the macOS GPU plugin we tried
+first; see Anomalies) run of the same hparams landed at 13 dB; the
+12 dB gap is unexplained and not pursued — could be backend
+numerics, PRNG-stream differences across plugins, or basin
+sensitivity to either of those. The mlx number is the honest
 paper-default performance on this stack; the jax-mps figure is not
 cited as a comparand. Still far behind SIREN, which is consistent
 with WIRE's trade-off (small σ for sharp edges, large σ for
@@ -153,10 +164,11 @@ into a plain ReLU MLP. Paper defaults `sigma=10, num_freqs=256,
 lr=1e-4`. Seventh at 18.07 dB. The paper's `lr=1e-4` is conservative
 and the network is genuinely still descending at step 1000 — PSNR
 climbed +0.65 dB over steps 900→1000 (from 17.42 to 18.07), a slope
-that has not flattened. Extrapolating that slope, 5000 steps would
-close most of the gap; the steady-state cost makes that ~17 minutes
-of additional training. At a sweep level this counts against RFF; at
-a per-basis tuning level it would invite a `lr=1e-3` re-run.
+that has not flattened. Whether that slope sustains long enough to
+close the SIREN gap is exactly what a longer-budget re-run would
+answer; a 100-step window doesn't license the extrapolation. At a
+sweep level this counts against RFF; at a per-basis tuning level it
+would invite a `lr=1e-3` re-run.
 
 **gabor-mfn** (Fathony+ 2021). MFN with Gabor filters (Gaussian
 envelope × sinusoid). Paper defaults `alpha=6, beta=1, weight_scale=1,
@@ -182,8 +194,8 @@ worse initialisation (initial loss 1.02 vs SIREN's 0.31) and
 never recovers — the loss curve descends monotonically but slowly,
 exactly the shape of "stuck in a poor basin." The paper itself
 reports seed sensitivity from the first-bias initialisation;
-SIREN+0.32 to FINER−21.18 on the same seed at the same hparams
-is at the extreme end of that. A multi-seed sweep, or a
+FINER landing 21.18 dB below SIREN on the same seed at the same
+hparams is at the extreme end of that. A multi-seed sweep, or a
 `first_bias_scale` ablation across `{1, 5, 10, 20}`, would
 distinguish "this seed is unlucky" from "this hparam choice is
 unlucky" — both are tracked as follow-ups.
@@ -192,11 +204,12 @@ unlucky" — both are tracked as follow-ups.
 
 For 256×256 natural-image fitting at modest depth (4 hidden layers, 128
 width) and 1000 training steps with paper-default hyperparameters, SIREN
-is the basis to reach for — it's the highest PSNR, the cheapest
-per-step (114 s steady-state for 950 steps, vs 143-417 s for the rest),
-and 0.03 dB ahead of its closest competitor (H-SIREN). The rest of the
-field is far enough behind that the comparison is more about *why*
-they're behind than which one to pick second.
+is the basis to reach for — it's the highest PSNR and the cheapest
+per-step (114 s steady-state for 950 steps, vs 143-417 s for the rest);
+indistinguishable from H-SIREN within the resolution of one seed
+(0.03 dB gap). The rest of the field is far enough behind that the
+comparison is more about *why* they're behind than which one to pick
+second.
 
 Four caveats apply when generalising this result:
 
@@ -229,10 +242,8 @@ Four caveats apply when generalising this result:
 ## Reproducibility
 
 The sweep was run against `feat/architecture-sweep` rebased onto
-`origin/main` at `9bd759a`, with the Box-Muller rewrite of RFF's
-B-matrix sampling applied (PR #15 — see Anomalies below for why).
-PR #15 is a prerequisite of this PR; merging this PR without it on
-`main` would leave RFF unable to construct on `jax-mps`.
+`origin/main` at `9bd759a`. Sequenced to merge after PR #15 (see
+Anomalies).
 
 Driver:
 
