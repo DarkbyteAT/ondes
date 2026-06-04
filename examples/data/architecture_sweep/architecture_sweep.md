@@ -6,10 +6,11 @@ fitting a single image at each basis's paper-default hyperparameters.
 ## Executive summary
 
 SIREN wins **at paper-default hyperparameters on this single seed** —
-34.23 dB final PSNR, 134 seconds — with H-SIREN indistinguishable from
+34.23 dB final PSNR, 120 s total wall-clock (114 s steady-state +
+6 s one-time JIT compile) — with H-SIREN indistinguishable from
 it at 34.20 dB (0.03 dB gap). Everything else lands at least 8 dB
 lower: WIRE 25.53, Fourier-MFN 23.36, PNF 21.74, BACON 20.91, RFF
-18.34, Gabor-MFN 15.53, and FINER bottoms out at 13.05 dB despite
+18.07, Gabor-MFN 15.53, and FINER bottoms out at 13.05 dB despite
 being a SIREN extension. The ranking is faithful to "out-of-the-box at
 paper defaults on one seed" and should be read as such, not as a
 verdict on the architectures themselves; per-basis hyperparameter
@@ -35,7 +36,7 @@ original paper recommends. No per-basis tuning was performed.
 | optimiser         | Adam (per-basis lr per paper)          |
 | chunk size (scan) | 50                                     |
 | seed              | 0                                      |
-| total wall-clock  | 32 min 14 s                            |
+| total wall-clock  | 30 min 54 s (sum of per-basis totals)  |
 
 **Hardware.** Apple Silicon (M-series), macOS 15.6, `jax==0.10.1` with the
 `jax-mlx-plugin==0.0.4` (`mlx==0.31.2`, `mlx-metal==0.31.2`) sidecar venv at
@@ -51,23 +52,36 @@ same as asking which basis can be coaxed to the highest PSNR with a
 per-image hyperparameter sweep. Per-basis tuning would almost certainly
 reshuffle the ranking (cf. the FINER note below).
 
+**Wall-clock decomposition.** Each per-basis fit reports three timings
+in `runs/sweep-arch/<basis>/timing.json`: `compile_s` is the wall-clock
+spent on the first `jax.jit`-traced training chunk (one-time XLA
+lowering + compile), `steady_s` is the wall-clock for the remaining 19
+chunks (950 steps of warm-cache training), and `total_s` is their sum
+plus aggregator bookkeeping. Per-step training cost is `steady_s / 950`;
+`compile_s` is a fixed overhead that amortises across longer training
+runs. Discussions of per-step speed in the per-basis notes and
+conclusion cite `steady_s`.
+
 The `synthetic` subcommand is not included — it is a self-contained smoke
 fit against a generated target (sinusoid / gaussian bump / Mandelbrot),
 not a natural-image fit, so it has no meaningful place in this comparison.
 
 ## Results
 
-| Basis        | Paper            | Final PSNR (dB) | Final MSE   | Wall-clock (s) | Notes                                              |
-| ------------ | ---------------- | --------------: | ----------: | -------------: | -------------------------------------------------- |
-| siren        | Sitzmann+ 2020   |           34.23 |   3.774e-04 |            134 |                                                    |
-| hsiren       | Cai & Pan 2024   |           34.20 |   3.805e-04 |            173 | indistinguishable from SIREN at one seed (0.03 dB) |
-| wire         | Saragadam+ 2023  |           25.53 |   2.797e-03 |            208 | known seed-sensitive at paper σ=10                 |
-| fourier-mfn  | Fathony+ 2021    |           23.36 |   4.610e-03 |            217 |                                                    |
-| pnf          | Yang+ 2022       |           21.74 |   6.704e-03 |            198 |                                                    |
-| bacon        | Lindell+ 2022    |           20.91 |   8.117e-03 |            197 | output bandwidth aliasing at hidden=128            |
-| rff          | Tancik+ 2020     |           18.34 |   1.465e-02 |            209 | paper `sigma=10, lr=1e-4` underconverges in 1000 s |
-| gabor-mfn    | Fathony+ 2021    |           15.53 |   2.802e-02 |            434 | recurrence is slowest per-step                     |
-| finer        | Liu+ 2024        |           13.05 |   4.954e-02 |            164 | seed-fragile: this seed lands far from a good init |
+`Compile (s)` is the one-time JIT compile of the first scan chunk;
+`Steady (s)` is the remaining 950 steps; `Total (s)` is their sum.
+
+| Basis        | Paper            | Final PSNR (dB) | Final MSE   | Compile (s) | Steady (s) | Total (s) | Notes                                              |
+| ------------ | ---------------- | --------------: | ----------: | ----------: | ---------: | --------: | -------------------------------------------------- |
+| siren        | Sitzmann+ 2020   |           34.23 |   3.774e-04 |        6.24 |     113.70 |       120 |                                                    |
+| hsiren       | Cai & Pan 2024   |           34.20 |   3.805e-04 |        7.84 |     147.24 |       155 | indistinguishable from SIREN at one seed (0.03 dB) |
+| wire         | Saragadam+ 2023  |           25.53 |   2.797e-03 |        9.72 |     184.67 |       194 | known seed-sensitive at paper σ=10                 |
+| fourier-mfn  | Fathony+ 2021    |           23.36 |   4.610e-03 |        9.63 |     191.12 |       201 |                                                    |
+| pnf          | Yang+ 2022       |           21.74 |   6.704e-03 |       10.29 |     185.61 |       196 |                                                    |
+| bacon        | Lindell+ 2022    |           20.91 |   8.117e-03 |        9.56 |     183.78 |       193 | output bandwidth aliasing at hidden=128            |
+| rff          | Tancik+ 2020     |           18.07 |   1.561e-02 |        9.91 |     195.00 |       205 | paper `sigma=10, lr=1e-4` underconverges in 1000 s |
+| gabor-mfn    | Fathony+ 2021    |           15.53 |   2.802e-02 |       22.84 |     417.38 |       440 | recurrence is slowest per-step                     |
+| finer        | Liu+ 2024        |           13.05 |   4.954e-02 |        7.54 |     142.95 |       150 | seed-fragile: this seed lands far from a good init |
 
 Numbers sorted by final PSNR descending. The same data is in
 `results.csv` (machine-readable). Per-run directories
@@ -128,21 +142,25 @@ interact poorly with the layer recurrence at hidden=128 width.
 
 **rff** (Tancik+ 2020). Gaussian Random Fourier Features encoding
 into a plain ReLU MLP. Paper defaults `sigma=10, num_freqs=256,
-lr=1e-4`. Seventh at 18.34 dB. The paper's `lr=1e-4` is conservative
-and the network is genuinely still descending at step 1000 (PSNR was
-climbing roughly 0.5 dB per 100 steps near the end) — give it 5000
-steps and it would close most of the gap. At a sweep level this counts
-against RFF; at a per-basis tuning level it would invite a `lr=1e-3`
-re-run.
+lr=1e-4`. Seventh at 18.07 dB. The paper's `lr=1e-4` is conservative
+and the network is genuinely still descending at step 1000 — PSNR
+climbed +0.65 dB over steps 900→1000 (from 17.42 to 18.07), a slope
+that has not flattened. Extrapolating that slope, 5000 steps would
+close most of the gap; the steady-state cost makes that ~17 minutes
+of additional training. At a sweep level this counts against RFF; at
+a per-basis tuning level it would invite a `lr=1e-3` re-run.
 
 **gabor-mfn** (Fathony+ 2021). MFN with Gabor filters (Gaussian
 envelope × sinusoid). Paper defaults `alpha=6, beta=1, weight_scale=1,
 lr=1e-3`. Eighth at 15.53 dB and **the slowest per fit by a wide
-margin** (434 s vs ~200 s typical) — the per-filter scale sampling
-and the additional envelope computation make the recurrence kernel
-substantially heavier than Fourier-MFN. The PSNR gap to Fourier-MFN
-(8 dB) is mostly a converge-rate story; both should improve with
-more steps but Gabor's per-step cost makes that expensive.
+margin** — 417 s steady-state vs ~185 s typical for the other
+non-SIREN bases, and the largest one-time compile too (23 s vs ~9 s
+typical). The per-filter scale sampling and the additional envelope
+computation make the recurrence kernel substantially heavier than
+Fourier-MFN both to compile and to step through. The PSNR gap to
+Fourier-MFN (8 dB) is mostly a converge-rate story; both should
+improve with more steps but Gabor's per-step cost makes that
+expensive.
 
 **finer** (Liu+ 2024). SIREN with a first-layer bias whose
 initialisation is bounded by `first_bias_scale`. The paper's
@@ -166,7 +184,8 @@ unlucky" — both are tracked as follow-ups.
 
 For 256×256 natural-image fitting at modest depth (4 hidden layers, 128
 width) and 1000 training steps with paper-default hyperparameters, SIREN
-is the basis to reach for — it's the highest PSNR, the fastest per fit,
+is the basis to reach for — it's the highest PSNR, the cheapest
+per-step (114 s steady-state for 950 steps, vs 143-417 s for the rest),
 and 0.03 dB ahead of its closest competitor (H-SIREN). The rest of the
 field is far enough behind that the comparison is more about *why*
 they're behind than which one to pick second.
