@@ -22,6 +22,7 @@ discriminators"). The CLI follows the library's discipline so the example
 doesn't model a pattern the library refuses to ship.
 """
 
+import time
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
@@ -169,10 +170,18 @@ def train(
     chunk_size: int = 100,
     on_step: Callable[[int, float], None] | None = None,
     on_chunk: Callable[..., None] | None = None,
-) -> tuple[Model, float, float]:
+) -> tuple[Model, float, float, list[float]]:
     """Chunked Adam+scan training loop with two callback hooks.
 
-    Returns `(trained_model, initial_loss, final_loss)`.
+    Returns `(trained_model, initial_loss, final_loss, chunk_times)`. The
+    `chunk_times` list holds the per-chunk wall-clock in seconds (one entry
+    per scan invocation). `chunk_times[0]` includes JIT-compile + first-
+    chunk execution; `sum(chunk_times[1:])` is steady-state cost across
+    the remaining chunks. Callers split these to report compile-vs-steady
+    timing separately. Each entry is measured with `time.perf_counter()`
+    around the `run_chunk` call, after `jax.block_until_ready(...)` forces
+    XLA's async dispatch to complete — otherwise the timer would only
+    capture queue submission, not actual compute.
 
     - `on_step(step, loss)` — fires once per Adam step from Python, after the
       chunk that contains the step completes. The full chunk's loss history
@@ -242,8 +251,19 @@ def train(
     # a max-clamp — the clamp would have hidden a `steps=0` request behind
     # a silent one-chunk run.
     n_chunks = steps // chunk_size
+    chunk_times: list[float] = []
     for i in range(n_chunks):
+        t0 = time.perf_counter()
         (model, opt_state), losses = run_chunk(model, opt_state, coords, target)
+        # `block_until_ready` forces XLA's async dispatch to complete before
+        # we stop the timer. Without it `chunk_times[0]` would only measure
+        # queue submission + Python-side overhead, not the actual JIT
+        # compile + first-chunk execution we want to attribute to compile
+        # cost. Block on both leaves to be safe — `opt_state` is the
+        # cheaper of the two (Adam moments) so the wait is dominated by
+        # the model leaves either way.
+        jax.block_until_ready((model, opt_state))
+        chunk_times.append(time.perf_counter() - t0)
         # Materialise the chunk's per-step losses once and feed them to on_step.
         # Per-step cadence, single host transfer — much cheaper than io_callback.
         # `losses[j]` is the pre-update loss at step `base + j` (see docstring).
@@ -268,7 +288,7 @@ def train(
     # the model state that ends training would be invisible in CSV / curve.
     if on_step is not None:
         on_step(steps, final_loss)
-    return model, initial_loss, final_loss
+    return model, initial_loss, final_loss, chunk_times
 
 
 @eqx.filter_jit
@@ -528,7 +548,7 @@ def _train_and_save(
 
         typer.echo(f"run dir: {output_dir}")
         typer.echo(f"training {steps} steps in chunks of {chunk_size} (per-step CSV, per-chunk plot)...")
-        model, initial_loss, final_loss = train(
+        model, initial_loss, final_loss, chunk_times = train(
             model,
             coords,
             target,
@@ -543,6 +563,29 @@ def _train_and_save(
     # note the convention. Sitzmann+ 2020 reports peak=1 PSNR on normalised images.
     psnr = -10.0 * np.log10(max(final_loss, 1e-12))
     typer.echo(f"initial_loss={initial_loss:.6f}  final_loss={final_loss:.6f}  PSNR={psnr:.2f} dB")
+
+    # Split compile vs steady-state wall-clock and write `timing.json`. The
+    # first chunk pays the JIT-compile cost on top of its `chunk_size` Adam
+    # steps; the remaining `n_chunks - 1` chunks are steady-state cost we
+    # can extrapolate per-step from. Reporting both separately lets the
+    # writeup's per-step inferences cite the steady number while the
+    # methodology section names the compile overhead honestly.
+    compile_s = chunk_times[0] if chunk_times else 0.0
+    steady_s = sum(chunk_times[1:]) if len(chunk_times) > 1 else 0.0
+    total_s = sum(chunk_times)
+    timing = {
+        "compile_s": compile_s,
+        "steady_s": steady_s,
+        "total_s": total_s,
+        "n_chunks": len(chunk_times),
+        "chunk_size": chunk_size,
+        "steady_steps": max(0, (len(chunk_times) - 1) * chunk_size),
+    }
+    (output_dir / "timing.json").write_text(json.dumps(timing, indent=2))
+    typer.echo(
+        f"timing: compile_s={compile_s:.2f}  steady_s={steady_s:.2f}  "
+        f"total_s={total_s:.2f}  (n_chunks={len(chunk_times)})"
+    )
 
     _save_recon_png(model, grid, in_dim, target, output_dir / "recon_final.png")
     typer.echo(f"artifacts written to {output_dir}")

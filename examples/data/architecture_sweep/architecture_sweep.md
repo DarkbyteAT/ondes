@@ -5,14 +5,16 @@ fitting a single image at each basis's paper-default hyperparameters.
 
 ## Executive summary
 
-SIREN wins this regime — 34.23 dB final PSNR, 134 seconds — with H-SIREN
-essentially tied at 34.20 dB. Everything else lands at least 8 dB lower:
-WIRE 25.53, Fourier-MFN 23.36, PNF 21.74, BACON 20.91, RFF 18.34,
-Gabor-MFN 15.53, and FINER bottoms out at 13.05 dB despite being a SIREN
-extension. The ranking is faithful to "out-of-the-box at paper defaults
-on one seed" and should be read as such, not as a verdict on the
-architectures themselves; per-basis hyperparameter tuning and seed
-averaging would almost certainly reshape it (FINER in particular).
+SIREN wins **at paper-default hyperparameters on this single seed** —
+34.23 dB final PSNR, 134 seconds — with H-SIREN indistinguishable from
+it at 34.20 dB (0.03 dB gap). Everything else lands at least 8 dB
+lower: WIRE 25.53, Fourier-MFN 23.36, PNF 21.74, BACON 20.91, RFF
+18.34, Gabor-MFN 15.53, and FINER bottoms out at 13.05 dB despite
+being a SIREN extension. The ranking is faithful to "out-of-the-box at
+paper defaults on one seed" and should be read as such, not as a
+verdict on the architectures themselves; per-basis hyperparameter
+tuning and seed averaging would almost certainly reshape it (FINER in
+particular).
 
 ![Per-basis reconstructions in PSNR-descending order](comparison_grid.png)
 
@@ -58,7 +60,7 @@ not a natural-image fit, so it has no meaningful place in this comparison.
 | Basis        | Paper            | Final PSNR (dB) | Final MSE   | Wall-clock (s) | Notes                                              |
 | ------------ | ---------------- | --------------: | ----------: | -------------: | -------------------------------------------------- |
 | siren        | Sitzmann+ 2020   |           34.23 |   3.774e-04 |            134 |                                                    |
-| hsiren       | Cai & Pan 2024   |           34.20 |   3.805e-04 |            173 | within sampling noise of SIREN                     |
+| hsiren       | Cai & Pan 2024   |           34.20 |   3.805e-04 |            173 | indistinguishable from SIREN at one seed (0.03 dB) |
 | wire         | Saragadam+ 2023  |           25.53 |   2.797e-03 |            208 | known seed-sensitive at paper σ=10                 |
 | fourier-mfn  | Fathony+ 2021    |           23.36 |   4.610e-03 |            217 |                                                    |
 | pnf          | Yang+ 2022       |           21.74 |   6.704e-03 |            198 |                                                    |
@@ -68,7 +70,10 @@ not a natural-image fit, so it has no meaningful place in this comparison.
 | finer        | Liu+ 2024        |           13.05 |   4.954e-02 |            164 | seed-fragile: this seed lands far from a good init |
 
 Numbers sorted by final PSNR descending. The same data is in
-`results.csv` (machine-readable); intermediate JSON in `_metrics.json`.
+`results.csv` (machine-readable). Per-run directories
+`runs/sweep-arch/<basis>/` (containing each fit's `loss.csv`,
+`config.json`, `timing.json`, recon snapshots, evolution GIF) are
+gitignored — regenerate them locally with `bash scripts/sweep_astronaut.sh`.
 
 ![Per-basis loss curves at paper-default hparams](loss_curves.svg)
 
@@ -83,21 +88,23 @@ sign the basis isn't suited to this regime.
 
 **hsiren** (Cai & Pan 2024). SIREN extended by a `sinh` pre-modulation
 that lets the first layer reach higher frequencies than SIREN's bandlimit.
-Paper defaults `omega=30, lr=5e-4`. Statistically tied with SIREN
-(0.03 dB lower) — the `sinh` enrichment is wasted at this image
-resolution and depth, where SIREN's bandwidth already covers what the
-image contains. Would expect H-SIREN to pull ahead on higher-frequency
-targets (textures, fine detail at 512+ resolution) per the paper.
+Paper defaults `omega=30, lr=5e-4`. Indistinguishable from SIREN at one
+seed (0.03 dB lower) — too close to read anything into without multi-seed
+data. Would expect H-SIREN to pull ahead on higher-frequency targets
+(textures, fine detail at 512+ resolution) per the paper.
 
 **wire** (Saragadam+ 2023). Gabor wavelet activation
 `sin(ω·z) · exp(-σ²·z²)` combining oscillation and a Gaussian
 envelope. Paper defaults `omega=10, s_init=10, lr=1e-3`. Third place
-at 25.53 dB. WIRE was an order of magnitude better here than under
-jax-mps (13 dB), which suggests it was hitting a fp32-precision-related
-bad basin on the other backend; the mlx number is the honest paper-default
-performance. Still far behind SIREN, which is consistent with WIRE's
-trade-off (small σ for sharp edges, large σ for smoothness, paper σ=10
-trying to split the difference on natural images).
+at 25.53 dB. A discarded jax-mps run of the same hparams landed at
+13 dB; the 12 dB gap is unexplained and not pursued — could be
+backend numerics, PRNG-stream differences across plugins, or
+basin sensitivity to either of those. The mlx number is the honest
+paper-default performance on this stack; the jax-mps figure is not
+cited as a comparand. Still far behind SIREN, which is consistent
+with WIRE's trade-off (small σ for sharp edges, large σ for
+smoothness, paper σ=10 trying to split the difference on natural
+images).
 
 **fourier-mfn** (Fathony+ 2021). Multiplicative Filter Network with
 Fourier filters: `sin(W·x + b)` multiplied through a recurrence of
@@ -138,18 +145,22 @@ substantially heavier than Fourier-MFN. The PSNR gap to Fourier-MFN
 more steps but Gabor's per-step cost makes that expensive.
 
 **finer** (Liu+ 2024). SIREN with a first-layer bias whose
-initialisation is bounded by `first_bias_scale` (paper recommends 5).
-Paper defaults `omega=30, first_bias_scale=5, lr=5e-4`. Last place
-at 13.05 dB. This is the outlier of the sweep: FINER extends SIREN
-and so we'd expect it to be a SIREN-class winner, but on this seed
-it starts from a *much* worse initialisation (initial loss 1.02 vs
-SIREN's 0.31) and never recovers — the loss curve descends
-monotonically but slowly, exactly the shape of "stuck in a poor
-basin." The paper itself reports seed sensitivity from the
-first-bias initialisation; SIREN+0.32 to FINER−21.18 on the same
-seed at the same hparams is at the extreme end of that. With
-seed averaging or with `first_bias_scale=1`, FINER would be expected
-to land near SIREN.
+initialisation is bounded by `first_bias_scale`. The paper's
+Section 3 tries `first_bias_scale ∈ {1, 5, 10, 20}` and reports
+varying sensitivity to the choice; this sweep uses `5` as a
+midpoint, not as a paper recommendation. Other hparams:
+`omega=30, lr=5e-4`. Last place at 13.05 dB. This is the outlier
+of the sweep: FINER extends SIREN and so we'd expect it to be a
+SIREN-class winner, but on this seed it starts from a *much*
+worse initialisation (initial loss 1.02 vs SIREN's 0.31) and
+never recovers — the loss curve descends monotonically but slowly,
+exactly the shape of "stuck in a poor basin." The paper itself
+reports seed sensitivity from the first-bias initialisation;
+SIREN+0.32 to FINER−21.18 on the same seed at the same hparams
+is at the extreme end of that. A multi-seed sweep, or a
+`first_bias_scale` ablation across `{1, 5, 10, 20}`, would
+distinguish "this seed is unlucky" from "this hparam choice is
+unlucky" — both are tracked as follow-ups.
 
 ## Conclusion
 
@@ -160,7 +171,7 @@ and 0.03 dB ahead of its closest competitor (H-SIREN). The rest of the
 field is far enough behind that the comparison is more about *why*
 they're behind than which one to pick second.
 
-Three caveats apply when generalising this result:
+Four caveats apply when generalising this result:
 
 1. **Single seed.** FINER's 13 dB is a genuine seed-fragility datapoint,
    not a representative one. A multi-seed sweep would change the floor
@@ -180,6 +191,13 @@ Three caveats apply when generalising this result:
    FINER, and the MFN family were all designed for regimes where SIREN
    leaves performance on the table — they're being measured here in the
    regime where SIREN does its best work.
+
+4. **Input dimensionality.** This is a 2D coord-to-amplitude fit. Bases
+   designed primarily for 3D coords (BACON for signed-distance fields,
+   the MFN family and PNF for neural radiance fields) may shift
+   relative ranking on 3D targets — the failure modes they were built
+   to address (volumetric scene rendering, view-consistency) don't
+   stress in a 2D image fit.
 
 ## Reproducibility
 
@@ -217,20 +235,23 @@ SHARED="--image examples/data/astronaut_256.png --hidden 128 --layers 4 \
 so no `JAX_PLATFORMS` env var is needed (in fact, setting one breaks the
 plugin loader; the env-var path is for `jax-mps`).
 
-Sidecar venv setup (Apple Silicon):
+Sidecar venv setup (Apple Silicon). Every version is pinned in
+`scripts/requirements-mlx.txt` to the exact build that produced
+the numbers in this writeup — re-running months later won't pick
+up an incompatible `jax-mlx-plugin` minor or a JAX version that
+lowers `aval_to_ir_type` differently.
 
 ```bash
 uv venv --python 3.13 .venv-mlx
 .venv-mlx/bin/python -m ensurepip --upgrade
-.venv-mlx/bin/python -m pip install --timeout 600 jax jaxlib jax-mlx-plugin
-.venv-mlx/bin/python -m pip install --timeout 600 -e . equinox optax \
-    jaxtyping matplotlib pillow typer jax-tqdm
+.venv-mlx/bin/python -m pip install --timeout 600 -r scripts/requirements-mlx.txt
+.venv-mlx/bin/python -m pip install --timeout 600 -e .
 .venv-mlx/bin/python -c "import jax; print(jax.devices())"  # [mlx:0]
 ```
 
 The `mlx-metal` wheel is ~38 MB; pip's `--timeout 600` is required
 because `uv pip install`'s default 30 s timeout reliably fails the
-download.
+download (UV_HTTP_TIMEOUT=600 covers it sometimes but not reliably).
 
 ## Anomalies
 
@@ -264,12 +285,16 @@ commit `4b19d02` (on `main`) replaces `jnp.sinh(pre)` in
 `jax-mps` `aval_to_ir_type` reason. Algebraically identical; mlx
 doesn't need it but it doesn't hurt.
 
-**FINER's 13 dB outlier.** See per-basis notes. Genuine seed-fragility,
-not a backend issue or implementation bug. The loss curve is monotonic,
-just stuck — initial loss is ~3× SIREN's, and the recovery is too slow
-to close the gap in 1000 steps. Multi-seed averaging is the right
-follow-up; a single-seed report is sensitive to this kind of
-init-dependent stuck-basin behaviour.
+**FINER's 13 dB outlier.** See per-basis notes. Not a backend issue or
+implementation bug — the loss curve is monotonic, just stuck. Initial
+loss is ~3× SIREN's and recovery is too slow to close the gap in 1000
+steps. Two confounds need separating before claiming this is "the
+architecture's failure mode": (a) single-seed sensitivity (the paper
+itself reports seed dependence) and (b) the choice of
+`first_bias_scale = 5` — the paper's Section 3 tries `{1, 5, 10, 20}`
+and we picked the midpoint, not a recommended value. Both are tracked
+as follow-up cards: a multi-seed sweep, and a `first_bias_scale`
+ablation across the four paper values.
 
 **No CPU fallback.** All 9 fits ran on `[mlx:0]`. Wall-clock numbers
 are directly comparable across bases.

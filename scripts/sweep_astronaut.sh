@@ -27,7 +27,11 @@ export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 # loader; the env var path is for jax-mps).
 PY=".venv-mlx/bin/python"
 IMG="examples/data/astronaut_256.png"
-OUT="runs/sweep-arch"
+# Run-dir is overridable so a contributor can store sweeps under any path
+# without editing both this driver and the aggregator. The aggregator reads
+# the same `ONDES_SWEEP_RUN_DIR` env var.
+OUT="${ONDES_SWEEP_RUN_DIR:-runs/sweep-arch}"
+export ONDES_SWEEP_RUN_DIR="$OUT"
 SHARED=(--image "$IMG" --hidden 128 --layers 4 --steps 1000 --grid 256
         --chunk-size 50 --snapshot-every 1 --log-every 50 --seed 0)
 
