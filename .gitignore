@@ -10,6 +10,7 @@ build/
 .ruff_cache/
 .pyright/
 .venv-mps/
+.venv-mlx/
 .worktrees/
 
 # Per-run training artifacts (see examples/fit_image.py — runs/<timestamp>/).

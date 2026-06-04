@@ -34,7 +34,10 @@ def test_siren_fits_synthetic_target(target_name: str) -> None:
     model = Model(inr=inr)
 
     # When: we train via the same `train(...)` helper the CLI invokes.
-    _, initial_loss, final_loss = train(model, coords, target, steps=200, lr=1e-3)
+    # `train` returns (model, initial_loss, final_loss, chunk_times); we
+    # don't assert on per-chunk timing here (system-load-sensitive), so the
+    # last tuple element is discarded.
+    _, initial_loss, final_loss, _ = train(model, coords, target, steps=200, lr=1e-3)
 
     # Then: final loss is at most 30% of initial. Loose smoke threshold —
     # catches "training is wired wrong" without claiming convergence.
@@ -69,7 +72,9 @@ def test_train_on_step_labels_match_parameter_state() -> None:
         captured.append((step, loss))
 
     # When: we train for 2 steps with chunk_size=2 (one scan + one final eval).
-    trained, _, _ = train(initial, coords, target, steps=2, lr=1e-3, chunk_size=2, on_step=capture)
+    # The trailing `_` absorbs the per-chunk-times list train() also returns;
+    # this test pins on_step label alignment, not timing.
+    trained, _, _, _ = train(initial, coords, target, steps=2, lr=1e-3, chunk_size=2, on_step=capture)
 
     # Then: exactly three on_step entries, at steps 0, 1, 2.
     assert [s for s, _ in captured] == [0, 1, 2], f"expected steps [0, 1, 2], got {[s for s, _ in captured]}"

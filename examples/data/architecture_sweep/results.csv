@@ -1,0 +1,10 @@
+basis,paper,final_psnr_db,final_mse,wall_clock_compile_s,wall_clock_steady_s,wall_clock_total_s
+siren,Sitzmann+ 2020,34.23,3.774e-04,6.24,113.70,120
+hsiren,Cai & Pan 2024,34.20,3.805e-04,7.84,147.24,155
+wire,Saragadam+ 2023,25.53,2.797e-03,9.72,184.67,194
+fourier-mfn,Fathony+ 2021,23.36,4.610e-03,9.63,191.12,201
+pnf,Yang+ 2022,21.74,6.704e-03,10.29,185.61,196
+bacon,Lindell+ 2022,20.91,8.117e-03,9.56,183.78,193
+rff,Tancik+ 2020,18.07,1.561e-02,9.91,195.00,205
+gabor-mfn,Fathony+ 2021,15.53,2.802e-02,22.84,417.38,440
+finer,Liu+ 2024,13.05,4.954e-02,7.54,142.95,150
