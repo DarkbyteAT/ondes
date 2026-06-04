@@ -53,6 +53,10 @@ For concrete composition recipes (Gaussian outputs, image fitting, SDF, rotation
 
 See [`DECISIONS.md`](DECISIONS.md) — short answer: the literature has no neutral default for most output transformations, so picking one would take a methodological side on users' behalf.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, code conventions, and the three quality gates every PR must clear.
+
 ## License
 
 MIT
