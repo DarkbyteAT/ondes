@@ -95,7 +95,7 @@ the methodology block above.
 | fourier-mfn  | Fathony+ 2021    |           23.36 |   4.610e-03 |        9.63 |     191.12 |       201 |                                                    |
 | pnf          | Yang+ 2022       |           21.74 |   6.704e-03 |       10.29 |     185.61 |       196 |                                                    |
 | bacon        | Lindell+ 2022    |           20.91 |   8.117e-03 |        9.56 |     183.78 |       193 | output bandwidth aliasing at hidden=128            |
-| rff          | Tancik+ 2020     |           18.07 |   1.561e-02 |        9.91 |     195.00 |       205 | paper `sigma=10, lr=1e-4` underconverges in 1000 s |
+| rff          | Tancik+ 2020     |           18.07 |   1.561e-02 |        9.91 |     195.00 |       205 | paper `sigma=10, lr=1e-4` underconverges in 1000 steps |
 | gabor-mfn    | Fathony+ 2021    |           15.53 |   2.802e-02 |       22.84 |     417.38 |       440 | recurrence is slowest per-step and slowest to compile |
 | finer        | Liu+ 2024        |           13.05 |   4.954e-02 |        7.54 |     142.95 |       150 | seed-fragile: this seed lands far from a good init |
 

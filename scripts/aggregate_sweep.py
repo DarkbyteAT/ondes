@@ -331,7 +331,7 @@ def main() -> None:
     skipped: list[tuple[str, str]] = []
     for basis in BASES:
         try:
-            steps, mse, psnr, final_mse, final_psnr = load_basis_metrics(basis)
+            _, _, _, final_mse, final_psnr = load_basis_metrics(basis)
         except (FileNotFoundError, ValueError) as exc:
             skipped.append((basis, str(exc)))
             continue
