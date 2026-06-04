@@ -183,11 +183,30 @@ The canonical reference is the FINER basis (PR #11). Walk through `ondes/basis/f
 
 Create `ondes/basis/<name>.py` containing:
 
-- A `<Name>Layer(Basis)` subclass — fields specific to *this* basis (e.g. `WIRELayer.s`, `FINERLayer.scale_req_grad`), an `__init__` that consumes any init-only kwargs and bakes them into `W`/`b`, and an `_activate(pre)` method.
-- A `<Name>(Body)` subclass — owns layer construction, the readout, and the structural fields (`out_features`, `hidden_dim`, `num_hidden_layers`). Reassign `out_features = _validate_body_args(num_hidden_layers, out_features)` at the top of `__init__` and then store *that* canonicalised value on `self.out_features`; the helper returns the canonicalised value rather than mutating in place, so a bare call `_validate_body_args(num_hidden_layers, out_features)` would leave `out_features=1` un-collapsed and break the pytree-identity contract. If your basis reuses the SIREN init family (SIREN, H-SIREN, WIRE, FINER all do), import `siren_init` and `_build_readout` from `ondes.basis.siren`. If your basis has its own init scheme (RFF uses Kaiming-uniform; MFN uses a Gamma prior for filter scales), write a helper next to your basis class — don't try to fold it into `siren_init`.
-- Module docstring citing the paper and any reference implementation URL.
+- A **`<Name>Layer(Basis)` subclass** with:
+  - Fields specific to *this* basis (e.g. `WIRELayer.s`, `FINERLayer.scale_req_grad`).
+  - An `__init__` that consumes any init-only kwargs and bakes them into `W`/`b`. Per-layer kwargs may apply only to a subset of layers — FINER's `first_bias_scale`, for example, is consumed only when `is_first=True` (see `finer.py:__init__`) so paper fidelity is preserved for the hidden layers. Mirror that conditional structure if your kwarg has an asymmetric role; don't apply it unconditionally.
+  - An `_activate(pre)` method implementing the basis's pointwise non-linearity.
 
-Use `ondes/basis/finer.py` as a structural template; use `ondes/basis/rff.py` if your basis has its own init scheme; use `ondes/basis/wire.py` if your basis carries an extra learnable scalar; use `ondes/basis/mfn.py` if your basis has a non-trivial recurrence in `trunk()` (overriding `Body.trunk` is fine when needed — RFF and MFN both do because their trunk shape differs from the SIREN-family layer-stack pattern).
+- A **`<Name>(Body)` subclass** that:
+  - Owns layer construction, the readout, and the structural fields (`out_features`, `hidden_dim`, `num_hidden_layers`).
+  - Reassigns `out_features = _validate_body_args(num_hidden_layers, out_features)` at the top of `__init__` (see Pitfall below) and stores the reassigned value on `self.out_features`.
+  - Imports `siren_init` and `_build_readout` from `ondes.basis.siren` if your basis reuses the SIREN init family (SIREN, H-SIREN, WIRE, FINER all do). If your basis has its own init scheme (RFF uses Kaiming-uniform; MFN uses a Gamma prior for filter scales), write a helper next to your basis class — don't try to fold it into `siren_init`.
+
+- A **module docstring** citing the paper and any reference implementation URL.
+
+> **Pitfall — `_validate_body_args` returns, it does not mutate.** A bare call `_validate_body_args(num_hidden_layers, out_features)` (return value discarded) leaves `out_features=1` un-collapsed and silently breaks the pytree-identity contract that `out_features=1` and `out_features=None` produce indistinguishable trees. Always reassign: `out_features = _validate_body_args(num_hidden_layers, out_features)`.
+
+Pick the closest structural template to copy from:
+
+| If your basis…                              | Use as template            |
+|---------------------------------------------|----------------------------|
+| Reuses SIREN init unchanged                 | `ondes/basis/finer.py`     |
+| Has its own init scheme                     | `ondes/basis/rff.py`       |
+| Carries an extra learnable scalar           | `ondes/basis/wire.py`      |
+| Has a non-trivial recurrence in `trunk()`   | `ondes/basis/mfn.py`       |
+
+Overriding `Body.trunk` is fine when needed — RFF and the MFN family both do because their trunk shape differs from the SIREN-family layer-stack pattern. If you do override, remember the FiLM contract above (your override must call `self._check_film_shape(film)` as its first line).
 
 ### 2. Export it from the package
 
@@ -209,6 +228,7 @@ Then update the cross-cutting suites:
 
 - Add your body class to `_BODY_CLASSES` in `tests/test_film_validation.py` so the FiLM-shape contract is exercised against it.
 - Add your body to the appropriate parametrisations in `tests/test_scannability.py` if your basis follows the SIREN-family layer-stack pattern (skip if you override `trunk()` non-trivially).
+- Extend `tests/test_basis.py` with init-correctness assertions modelled on the existing `siren_init` first-layer-bound and hidden-layer-bound tests if your basis introduces a new init helper; that file is the cross-cutting home for "the init bound matches the paper formula" properties as well as for body-level invariants shared across all basis families.
 
 ### 4. Add an example subcommand
 
