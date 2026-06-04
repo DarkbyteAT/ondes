@@ -62,6 +62,14 @@ plus aggregator bookkeeping. Per-step training cost is `steady_s / 950`;
 runs. Discussions of per-step speed in the per-basis notes and
 conclusion cite `steady_s`.
 
+**Box-Muller PRNG-stream fingerprint.** The numbers in this table
+reflect the Box-Muller Gaussian sampler from PR #15. Only RFF reads
+from `jax.random.normal` (B-matrix init), so only RFF's number moves
+under the swap: RFF goes from 18.34 dB (the prior `jax.random.normal`
+run) to 18.07 dB here, and every other basis's final PSNR is byte-
+identical to two decimal places across the two runs. RFF's ranking
+position is unchanged.
+
 The `synthetic` subcommand is not included — it is a self-contained smoke
 fit against a generated target (sinusoid / gaussian bump / Mandelbrot),
 not a natural-image fit, so it has no meaningful place in this comparison.
