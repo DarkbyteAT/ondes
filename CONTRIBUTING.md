@@ -64,7 +64,9 @@ Full reasoning lives in `DECISIONS.md` §"Structural design — polymorphism ove
 
 ### Value-function framing
 
-Every INR is a value function: `(coord, channel) → amplitude` returning a scalar. RGB is `(x, y, c) → amplitude` (channel is a coord), not `(x, y) → (r, g, b)` (channel as output dim). `out_features=1` is canonicalised to `out_features=None` at construction so the two scalar-yielding forms produce identical pytrees — relevant for serialisation, jit caching, and `tree_structure` equality.
+Every INR is a value function: `(coord, channel) → amplitude` returning a scalar. RGB is `(x, y, c) → amplitude` (channel is a coord), not `(x, y) → (r, g, b)` (channel as output dim). Channel-as-coord lets a single INR be queried at arbitrary channel indices without rebuilding the readout, and keeps the value-function abstraction uniform across scalar fields (signed distance), vector fields (flow), and multi-channel images — so don't reach for `out_features=3` to model RGB.
+
+`out_features=1` is canonicalised to `out_features=None` at construction so the two scalar-yielding forms produce identical pytrees — relevant for serialisation, jit caching, and `tree_structure` equality.
 
 `out_features = N > 1` is supported when the downstream genuinely needs `N` independent readouts (multi-task heads, vector fields with a fixed output dimensionality known at construction).
 
@@ -72,17 +74,25 @@ Every INR is a value function: `(coord, channel) → amplitude` returning a scal
 
 `Body.trunk(coord)` returns pre-readout hidden features and is the extension point for any post-trunk transformation. The library owns the linear readout; there is no `head=` kwarg, no `ondes.Head` type, and no `ondes.heads` namespace.
 
+`inr(coord)` runs the trunk *and* the linear readout (returning a scalar or `(N,)` vector). `inr.trunk(coord)` stops before the readout and returns hidden features of shape `(hidden_dim,)`, which is what you wrap when adding a distribution head.
+
 To add a distribution head (Gaussian, mixture, normalised flow, …), a rotation parameterisation, a vector field, or anything else built on top of the trunk, wrap a concrete `Body` inside your own `eqx.Module` and call `inr.trunk(coord)` (or `inr(coord)`) from it. See the README's composition snippet and the `Model` class in `examples/fit_image.py` for the canonical shape.
 
 Five independent rationales for the no-head decision (no neutral default exists in the literature, heads are post-trunk and have no coupling to ondes internals, heads are port-fragile while trunks are port-survivable, cohort-norm with `samgria`/`rltrain`/`xptrack`, additive reversibility asymmetry) are documented in `DECISIONS.md` §"Why no heads".
 
 ### FiLM contract
 
-Every concrete `trunk` calls `self._check_film_shape(film)` as its first line. The validator is defined once on `Body` and raises `ValueError` if `film` is not `None` and its shape is not `(num_hidden_layers, 2 * hidden_dim)`. `ValueError`, not `assert`, because the contract is part of the user-facing API and must survive `python -O`.
+FiLM (Feature-wise Linear Modulation, Perez et al. 2018) is per-layer affine conditioning: γ ⊙ h + β. The `film` tensor's trailing axis stacks γ and β concatenated — hence the `2 * hidden_dim` width.
+
+Every `trunk` implementation calls `self._check_film_shape(film)` as its first line. The validator is defined once on `Body` and raises `ValueError` if `film` is not `None` and its shape is not `(num_hidden_layers, 2 * hidden_dim)`. `ValueError`, not `assert`, because the contract is part of the user-facing API and must survive `python -O`.
+
+If your body inherits `Body.trunk` unchanged (as SIREN/HSIREN/WIRE/FINER do), the inherited implementation already calls the validator for you. If you override `trunk` (as RFF, BACON, PNF, and the MFN family do — typically because the basis has a non-trivial recurrence the layer-stack pattern doesn't capture), your override must call `self._check_film_shape(film)` explicitly as its first line.
 
 `tests/test_film_validation.py` parametrises across every shipped body class to lock the contract in. When you add a new body, add it to the `_BODY_CLASSES` tuple in that file.
 
 ### Init-only kwargs don't pollute the pytree
+
+`jax.lax.scan` over a stack of layers requires every layer in the stack to share an identical pytree structure (same fields, same static-vs-dynamic split). Init-only kwargs that get discarded after construction preserve this; init-only kwargs accidentally stored as fields break it.
 
 If a constructor kwarg is consumed only at construction time (its value influences `W`/`b` sampling but the forward pass never reads it again), take it as a `__init__` parameter and *do not* store it as a field. The canonical example is `is_first` on `SIRENLayer`/`HSIRENLayer`/`WIRELayer`/`FINERLayer` — it selects the SIREN init bound (`1/in_dim` for the first layer, `sqrt(6/in_dim)/omega` for the rest), the bound bakes into `W` and `b`, and the layer never needs `is_first` again. Storing it would add a static field that discriminates layer 0 from the rest at the pytree level, which breaks `jax.lax.scan` over the layer stack.
 
@@ -92,7 +102,20 @@ Conversely, a kwarg that *is* read at forward time (e.g. `FINERLayer.scale_req_g
 
 ### Repetition over confusing indirection
 
-Three near-identical `__init__` bodies are preferable to an abstraction that hides the structure (virtual init methods, `ClassVar` dispatch tables, mixin hierarchies). Each body's `__init__` is written out explicitly even when the resulting code is repetitive — see `SIREN.__init__`, `HSIREN.__init__`, `WIRE.__init__` as the reference. Trying to dedupe them via a shared `_init_layers` helper that branches on a class attribute is exactly the discriminator anti-pattern at lower granularity.
+Three near-identical `__init__` bodies are preferable to an abstraction that hides the structure (virtual init methods, `ClassVar` dispatch tables, mixin hierarchies). Each body's `__init__` is written out explicitly even when the resulting code is repetitive — see `SIREN.__init__`, `HSIREN.__init__`, `WIRE.__init__` as the reference. The rejected pattern looks like:
+
+```python
+# DON'T: branches on a class attribute, hides the structure, re-introduces
+# the polymorphism-by-discriminator anti-pattern at field granularity.
+class _SIRENFamilyBody(Body):
+    _INIT_KIND: ClassVar[str] = "siren"  # subclasses override
+
+    def _init_layers(self, ..., key):
+        init_fn = siren_init if self._INIT_KIND == "siren" else _kaiming_uniform_relu
+        ...
+```
+
+Trying to dedupe via a shared `_init_layers` helper that branches on a class attribute is exactly the discriminator anti-pattern at lower granularity.
 
 ### Library scope: machinery, not instantiations
 
