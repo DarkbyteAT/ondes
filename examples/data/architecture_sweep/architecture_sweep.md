@@ -183,9 +183,11 @@ Three caveats apply when generalising this result:
 
 ## Reproducibility
 
-The sweep was run against `feat/architecture-sweep` at commit
-`d77f638` (parent `ec1590c` on `main` plus a Box-Muller rewrite of
-RFF's B-matrix sampling — see Anomalies below for why).
+The sweep was run against `feat/architecture-sweep` rebased onto
+`origin/main` at `9bd759a`, with the Box-Muller rewrite of RFF's
+B-matrix sampling applied (PR #15 — see Anomalies below for why).
+PR #15 is a prerequisite of this PR; merging this PR without it on
+`main` would leave RFF unable to construct on `jax-mps`.
 
 Driver:
 
@@ -243,8 +245,8 @@ modulation), `lax_special.erf_inv` (used internally by
 three cleanly on Apple Silicon, so the sweep can run end-to-end on
 one backend.
 
-**Box-Muller rewrite of RFF's Gaussian sampling.** Commit `d77f638`
-replaces `jax.random.normal(key, shape)` in
+**Box-Muller rewrite of RFF's Gaussian sampling.** PR #15
+(`fix/rff-box-muller-mps`) replaces `jax.random.normal(key, shape)` in
 `ondes/basis/rff.py`'s B-matrix init with a Box-Muller draw built from
 two uniforms (`sqrt(-2·log u₁) · cos(2π·u₂)`). The samples are
 identically distributed N(0,1) — verified at N=10000: Box-Muller
@@ -252,8 +254,9 @@ mean=+0.0043, std=1.0043 vs `jax.random.normal` mean=−0.0119, std=0.9925,
 both well within ±0.05 of N(0,1). The rewrite is harmless on
 `jax-mlx-plugin` (this sweep's backend); it's load-bearing for anyone
 running `ondes` on `jax-mps`. PRNG-stream caveat: a seeded RFF run
-after this commit won't reproduce a seeded run before it — same
-distribution of B matrices, different actual draws.
+after PR #15 won't reproduce a seeded run before it — same
+distribution of B matrices, different actual draws. This PR is
+sequenced to merge after PR #15.
 
 **Exponential-identity rewrite of H-SIREN's `sinh`.** Pre-existing
 commit `4b19d02` (on `main`) replaces `jnp.sinh(pre)` in
