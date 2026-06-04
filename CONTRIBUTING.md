@@ -9,7 +9,7 @@ We welcome contributions that fit that scope:
 - **Tests** that pin a paper-claimed property (init bound, scannability, spectral behaviour) we don't already cover.
 - **Bug fixes**, type-checker fixes, and docstring sharpening.
 
-If you're not sure whether your idea fits — open a GitHub issue first and ask. The three-AND-gate in `DECISIONS.md` (spectral coupling / closed-form trap / multi-consumer) governs whether something belongs in the library at all versus in an `examples/` script; we'd rather discuss that upfront than after you've written the code.
+If you're not sure whether your idea fits — open a GitHub issue first and ask. The three-AND-gate in `DECISIONS.md` governs whether something belongs in the library at all versus in an `examples/` script: **spectral coupling** (the function's design reads or writes basis init or spectral structure), **closed-form trap** (a naive reimplementation would plausibly get a sign, scale, or normalisation wrong), and **multi-consumer with no horizon variant** (two or more downstream libraries need it now, and the literature offers no actively-competing parameterisation that would compete for the same name). We'd rather discuss this upfront than after you've written the code.
 
 ## Quick start
 
@@ -42,7 +42,7 @@ Equivalently:
 make all
 ```
 
-which runs `format-check`, `lint`, `typecheck`, and `test` in sequence and bails on the first failure. CI runs the same set on every push.
+which runs the `format-check`, `lint`, `typecheck`, and `test` targets in sequence and bails on the first failure (see `Makefile` for the target definitions). CI runs the same set on every push.
 
 Note this is a *different* "three-AND-gate" from the one in `DECISIONS.md`. That one governs whether a new function belongs in the library's public surface; this one governs whether a PR is ready for review. They share the "all three or none" discipline but answer different questions.
 
