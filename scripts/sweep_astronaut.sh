@@ -39,6 +39,8 @@ if [[ -n "$RESUME" ]]; then
     _skipping=1
 fi
 
+FAILED_BASES=()
+
 run_basis() {
     local name="$1"; shift
     if (( _skipping )); then
@@ -53,9 +55,20 @@ run_basis() {
     rm -rf "$dir"
     echo "=== sweep: $name ==="
     local start=$SECONDS
+    # Catch the basis crash locally so one failure doesn't `set -e` out
+    # before the aggregator runs — partial-sweep state is still useful,
+    # especially while we're chasing per-basis bugs. `|| local rc=$?`
+    # captures the exit, and we treat anything non-zero as a recorded
+    # failure rather than a fatal abort.
+    local rc=0
     "$PY" examples/fit_image.py "$name" \
-        "${SHARED[@]}" --output-dir "$dir" "$@"
+        "${SHARED[@]}" --output-dir "$dir" "$@" || rc=$?
     local elapsed=$((SECONDS - start))
+    if (( rc != 0 )); then
+        FAILED_BASES+=("$name")
+        echo "=== FAILED: $name (exit $rc, ${elapsed}s elapsed) ==="
+        return 0
+    fi
     echo "$name $elapsed" >> "$OUT/_wallclock.txt"
     echo "=== $name done in ${elapsed}s ==="
 }
@@ -63,6 +76,19 @@ run_basis() {
 mkdir -p "$OUT"
 if [[ -z "$RESUME" ]]; then
     : > "$OUT/_wallclock.txt"
+else
+    # RESUME drops earlier rows for any basis we're about to re-run so the
+    # wallclock file doesn't accumulate duplicate rows. Anything outside the
+    # set of basis names we're about to touch stays as-is.
+    if [[ -f "$OUT/_wallclock.txt" ]]; then
+        TMP=$(mktemp)
+        awk -v skip="$RESUME" '
+            BEGIN { skipping = 1 }
+            /^[[:space:]]*$/ { print; next }
+            { if ($1 == skip) skipping = 0; if (skipping) print }
+        ' "$OUT/_wallclock.txt" > "$TMP"
+        mv "$TMP" "$OUT/_wallclock.txt"
+    fi
 fi
 
 run_basis siren        --omega 30 --lr 5e-4
@@ -76,6 +102,11 @@ run_basis gabor-mfn    --alpha 6 --beta 1 --weight-scale 1 --lr 1e-3
 run_basis pnf          --input-scale 256 --weight-scale 1 --lr 1e-3
 
 echo
+if (( ${#FAILED_BASES[@]} > 0 )); then
+    echo "=== sweep finished with failures: ${FAILED_BASES[*]} ==="
+    echo "(aggregating on the bases that did finish)"
+fi
+
 echo "=== aggregating ==="
 "$PY" scripts/aggregate_sweep.py
 
@@ -83,3 +114,9 @@ echo
 echo "=== sweep complete ==="
 echo "per-run dirs: $OUT/<basis>/"
 echo "aggregated:   examples/data/architecture_sweep/"
+if (( ${#FAILED_BASES[@]} > 0 )); then
+    echo
+    echo "NOTE: ${#FAILED_BASES[@]} basis fits failed: ${FAILED_BASES[*]}"
+    echo "      Re-run with RESUME=<basis> to retry from a specific basis."
+    exit 1
+fi

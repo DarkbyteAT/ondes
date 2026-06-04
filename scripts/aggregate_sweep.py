@@ -51,21 +51,49 @@ PAPER = {
 
 
 def load_wallclock() -> dict[str, int]:
-    """Parse per-basis wall-clock lines written by sweep_astronaut.sh."""
+    """Parse per-basis wall-clock lines written by sweep_astronaut.sh.
+
+    On RESUME the driver appends to `_wallclock.txt` instead of truncating,
+    so the file can contain multiple rows for the same basis from successive
+    runs. Last-wins is the right semantic (it's the most recent measurement)
+    but a duplicate is worth surfacing — a row from a re-run made under
+    different system load can silently replace a clean number.
+    """
     wallclock: dict[str, int] = {}
+    duplicates: dict[str, int] = {}
     path = RUN_DIR / "_wallclock.txt"
     if not path.exists():
         return wallclock
     for line in path.read_text().splitlines():
         parts = line.split()
-        if len(parts) >= 2:
-            wallclock[parts[0]] = int(parts[1])
+        if len(parts) < 2:
+            continue
+        basis, seconds = parts[0], int(parts[1])
+        if basis in wallclock:
+            duplicates[basis] = duplicates.get(basis, 1) + 1
+        wallclock[basis] = seconds
+    if duplicates:
+        for basis, count in duplicates.items():
+            print(
+                f"WARNING: _wallclock.txt has {count} rows for '{basis}'; "
+                f"using the last one ({wallclock[basis]}s). Earlier rows "
+                f"likely came from a RESUME run — strip them if you want "
+                f"the file to round-trip cleanly."
+            )
     return wallclock
 
 
 def load_basis_metrics(basis: str) -> tuple[list[int], list[float], list[float], float, float]:
-    """Return (steps, mse_per_step, psnr_per_step, final_mse, final_psnr) for one basis."""
+    """Return (steps, mse_per_step, psnr_per_step, final_mse, final_psnr) for one basis.
+
+    Raises FileNotFoundError or ValueError with the basis name embedded so a
+    crash in the aggregator points at the offending run dir rather than the
+    generic "list index out of range" you get from blindly slicing an empty
+    list.
+    """
     csv_path = RUN_DIR / basis / "loss.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"loss.csv missing for basis '{basis}' at {csv_path}")
     steps: list[int] = []
     mse: list[float] = []
     psnr: list[float] = []
@@ -75,6 +103,8 @@ def load_basis_metrics(basis: str) -> tuple[list[int], list[float], list[float],
             steps.append(int(row["step"]))
             mse.append(float(row["loss"]))
             psnr.append(float(row["psnr_db"]))
+    if not steps:
+        raise ValueError(f"loss.csv is empty (header only?) for basis '{basis}' at {csv_path}")
     return steps, mse, psnr, mse[-1], psnr[-1]
 
 
@@ -151,14 +181,19 @@ def build_comparison_grid(rows: list[dict]) -> None:
             font=font,
         )
 
-    # Top-left: input (read from siren's run dir; all bases see the same input)
-    input_path = RUN_DIR / "siren" / "input.png"
-    paste(Image.open(input_path).convert("RGB"), "input", 0, 0)
+    # Top-left: input (read from whichever surviving run dir has an input.png;
+    # all bases see the same input, but siren's dir may have been skipped).
+    input_basis = next((r["basis"] for r in rows if (RUN_DIR / r["basis"] / "input.png").exists()), None)
+    if input_basis is None:
+        raise FileNotFoundError("No surviving run dir contains input.png; cannot build grid.")
+    paste(Image.open(RUN_DIR / input_basis / "input.png").convert("RGB"), "input", 0, 0)
 
-    # Remaining cells: bases in PSNR-descending order (so the eye sweeps best→worst)
+    # Remaining cells: bases in PSNR-descending order (so the eye sweeps best→worst).
+    # `cells` lays out the 9 non-input slots in reading order; on a partial sweep
+    # we just use as many as we have rows for and leave the rest as background.
     rows_sorted = sorted(rows, key=lambda r: -r["final_psnr_db"])
     cells = [(1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 2), (1, 2), (2, 2), (0, 3)]
-    for (col, row), r in zip(cells, rows_sorted, strict=True):
+    for (col, row), r in zip(cells, rows_sorted, strict=False):
         recon = Image.open(RUN_DIR / r["basis"] / "recon_final.png").convert("RGB")
         label = f"{r['basis']} {r['final_psnr_db']:.2f} dB"
         paste(recon, label, col, row)
@@ -231,13 +266,25 @@ def build_loss_curves(rows: list[dict]) -> None:
 
 
 def main() -> None:
-    """Read per-run artifacts and write the four committable aggregated outputs."""
+    """Read per-run artifacts and write the four committable aggregated outputs.
+
+    Skips bases whose run dirs are missing or malformed (with a WARNING line
+    naming the basis) rather than refusing to aggregate anything. This means
+    a partial sweep — e.g. 7/9 fits done before a crash — still produces a
+    usable comparison grid + curves + results.csv on whatever finished, so
+    the aggregator can be re-run mid-sweep to inspect progress.
+    """
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     wallclock = load_wallclock()
 
     rows: list[dict] = []
+    skipped: list[tuple[str, str]] = []
     for basis in BASES:
-        steps, mse, psnr, final_mse, final_psnr = load_basis_metrics(basis)
+        try:
+            steps, mse, psnr, final_mse, final_psnr = load_basis_metrics(basis)
+        except (FileNotFoundError, ValueError) as exc:
+            skipped.append((basis, str(exc)))
+            continue
         rows.append(
             {
                 "basis": basis,
@@ -247,6 +294,13 @@ def main() -> None:
                 "wall_clock_seconds": wallclock.get(basis, 0),
             }
         )
+
+    for basis, reason in skipped:
+        print(f"WARNING: skipping basis '{basis}': {reason}")
+    if not rows:
+        raise SystemExit("No usable basis runs found; aborting aggregation.")
+    if skipped:
+        print(f"Aggregating {len(rows)}/{len(BASES)} bases (skipped: {', '.join(b for b, _ in skipped)}).")
 
     write_results_csv(rows)
     build_comparison_grid(rows)
