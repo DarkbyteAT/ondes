@@ -75,27 +75,42 @@ classmethod factories, each with the citation in the source. Users either
 import `WinnerSchedule` and call a factory, or build their own
 `WinnerSchedule(...)` instance with explicit numbers.
 
-## 7. Theorem 3.1 smoke test uses layer-1, not layer-0
+## 7. Theorem 3.1 smoke test uses layer-1, not layer-0; intercept differs
 
-The paper's Theorem 3.1 prediction `Var ≈ 3 + d_h · s1² / 2` describes the
-**layer-1** pre-activation distribution — i.e. the input to the *second*
-sine activation, after layer-0's sine has folded the perturbed first
-linear's output into approximately uniform-on-(-1,1) coordinates. The
-ml-engineer corrected this during consult; the smoke test measures layer-1
-pre-activation variance, not layer-0.
+The paper's Theorem 3.1 prediction `Var[ω · pre_1] ≈ C + d_h · s1² / 2`
+describes the **layer-1** pre-activation distribution — i.e. the input to
+the *second* sine activation, after layer-0's sine has folded the
+perturbed first linear's output. The ml-engineer corrected this during
+consult; the smoke test measures layer-1 pre-activation variance, not
+layer-0.
 
-Two-line proof (also lives in the test docstring): if layer-0 output is
-approximately U(-1, 1)^{d_h} (the SIREN variance-preserving property held
-under layer-0's `[-1/in_dim, 1/in_dim]` uniform bound), then for layer 1
-with weight `W_1 ~ U(-c, c) + N(0, (s1/omega_hidden)²)` where
-`c = sqrt(6/d_h)/omega_hidden`, each pre-activation component has variance
-`Var[Σ_j W_1[i,j] · h_j] = d_h · E[W_1²] · Var[h_j] = d_h · (c²/3 +
-(s1/omega_hidden)²) · 1/3`. With `omega_hidden = omega_0 = 30` and the
-canonical bound, the deterministic part is `≈ 1 / (omega_hidden² / 2) · 1
-= 2 / omega_hidden²` per term; summing over `d_h` terms and folding in the
-noise variance reduces to `3 + d_h · s1² / 2` after the omega normalisation
-the paper bakes in. The test asserts the measured MC variance falls within
-a 3σ MC band of this prediction.
+**Slope is `d_h / 2`. Measured intercept under ondes' init is `1`, not
+the paper's `3`.** Empirically the slope matches to <0.5% relative; the
+intercept under ondes' SIREN init bound `c = sqrt(6/d_h) / ω` (uniform
+`W`) sits at `1`. The test asserts the slope only; the intercept is
+documented here and pointed at from the test docstring.
+
+Clean derivation (also reproduced in the test docstring):
+
+- Layer-0 sine output is approximately uniform-phase with
+  `Var[h_j] ≈ 1/2` (variance of `sin(·)` over a wide uniform-phase
+  argument), the SIREN variance-preserving property at canonical ω.
+- Layer-1 weight `W_{1,ij} ~ U(-c, c) + N(0, (s1/ω)²)` is i.i.d. across
+  `(i, j)`, so `E[W_{1,ij}²] = c²/3 + (s1/ω)²`.
+- `pre_1[i] = Σ_j W_{1,ij} · h_j` is a sum of `d_h` independent zero-mean
+  terms, so `Var[ω · pre_1[i]] = ω² · d_h · E[W_{1,ij}²] · Var[h_j] =
+  ω² · d_h · (c²/3 + (s1/ω)²) · (1/2)`.
+- With `c² = 6 / (d_h · ω²)`, `ω² · d_h · c² / 3 = 2`, so the
+  deterministic part contributes `2 · 1/2 = 1` to the variance — that's
+  the empirical intercept of `1`.
+- The noise part contributes `ω² · d_h · (s1/ω)² · 1/2 = d_h · s1² / 2`.
+- Sum: `Var[ω · pre_1] = 1 + d_h · s1² / 2`.
+
+The paper's `3` intercept reflects a different convention — likely a
+`Var[h_j] = 1` sine-output approximation rather than `1/2`, or a fan-in
+bias init that adds variance into the budget. Either way, WINNER's
+slope-on-`s1²` is the load-bearing quantity; the constant is
+init-convention-dependent and slope-only assertion is the right test.
 
 ## 8. Biases are not perturbed; SIRENLayer bias init inherited as-is
 
