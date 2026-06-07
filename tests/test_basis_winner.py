@@ -148,9 +148,15 @@ def test_spectral_centroid_dtype_preserved_float64() -> None:
     ``centroid * 2.0`` would force the result back to float32 under x64
     mode, silently dropping precision.
 
-    We toggle ``jax_enable_x64`` for the duration of this test via
-    ``jax.config.update``. The toggle is restored in a ``finally`` block
-    so the rest of the suite isn't affected.
+    Concurrency caveat: ``jax_enable_x64`` is a process-global flag, and
+    jax 0.10 does not expose a public context manager for it
+    (``jax.experimental.enable_x64`` was removed; only
+    ``jax.config.update`` remains). We toggle + restore in a
+    ``try / finally`` block, which is safe under serial test execution
+    (the default ``uv run pytest`` mode) but races under ``pytest-xdist``
+    workers in the same process. If we ever add ``pytest-xdist`` to the
+    project, mark this test with ``@pytest.mark.serial`` and configure
+    xdist to isolate it. For now: serial-only by convention.
     """
     prev = jax.config.read("jax_enable_x64")
     try:
@@ -164,79 +170,141 @@ def test_spectral_centroid_dtype_preserved_float64() -> None:
         jax.config.update("jax_enable_x64", prev)
 
 
-def test_spectral_centroid_nondefault_axes() -> None:
-    """Given: a (C, H, W) layout signal with ``channel_axis=0, freq_axis=-1``.
+def _old_global_sum_centroid(signal: jax.Array, *, freq_axis: int = -2, channel_axis: int = -1) -> float:
+    """Reference impl of the R1 (pre-fix) ``spectral_centroid``.
+
+    Kept locally as a *contrast oracle* for
+    ``test_spectral_centroid_per_channel_then_mean_distinct_from_global_sum``
+    and ``test_spectral_centroid_nondefault_axes_distinguishes_per_row``:
+    those tests must produce materially different numbers under this
+    function vs the current per-slice-then-mean impl. If the difference
+    collapses, the regression test has gone vacuous (as it did in R1 —
+    see the round-2 review batch).
+    """
+    n_channels = signal.shape[channel_axis]
+    n_freq = signal.shape[freq_axis]
+    spectrum = jnp.abs(jnp.fft.rfft(signal, axis=freq_axis))
+    freq_bins = jnp.fft.rfftfreq(n_freq, d=1.0).astype(signal.dtype)
+    freq_shape = [1] * spectrum.ndim
+    freq_shape[freq_axis] = freq_bins.shape[0]
+    freq_bins_b = freq_bins.reshape(freq_shape)
+    weighted = spectrum * freq_bins_b
+    reduce_axes = tuple(ax for ax in range(spectrum.ndim) if ax != channel_axis % spectrum.ndim)
+    num = jnp.sum(weighted, axis=reduce_axes)
+    den = jnp.sum(spectrum, axis=reduce_axes)
+    per_channel = jnp.where(den != 0, num / jnp.where(den != 0, den, 1.0), 0.0)
+    centroid = jnp.mean(per_channel)
+    return float((centroid * 2.0) / n_channels)
+
+
+def test_spectral_centroid_nondefault_axes_distinguishes_per_row() -> None:
+    """Given: a (C, H, W) layout signal with ``channel_axis=0, freq_axis=-1``,
+    where channel 0's rows carry *different* per-row frequencies.
 
     When: calling spectral_centroid.
-    Then: matches a hand-computed expected value built from the same
-    per-row-then-mean convention. Exercises the axis-resolution paths in
-    ``spectral_centroid`` that the default ``(-2, -1)`` test doesn't
-    touch.
+    Then: matches the hand-computed per-row-then-mean expected value, AND
+    materially differs from the old global-sum-per-channel reduction
+    (verified inline via ``_old_global_sum_centroid``). The varying
+    per-row frequency is what makes channel 0's per-row centroid
+    non-constant across rows; a regression in the channel-axis
+    resolution at ``winner.py:204`` (the
+    ``new_channel_axis = norm_channel_axis if norm_channel_axis <
+    norm_freq_axis else norm_channel_axis - 1`` line) would either
+    mis-reduce or pick up the wrong axis and produce a different number.
 
-    Construction: three channels, each a single integer-cycle sinusoid
-    at a distinct frequency. Per-channel centroid (after the freq-axis
-    reduction) is then constant across rows, so the per-row-then-mean
-    collapse picks up the channel's own frequency exactly. Final result
-    is ``mean_c(f_c / N) · 2 / n_ch`` where ``N`` is signal length along
-    ``freq_axis``.
+    Construction: 3 channels, 4 rows, N=256 samples per row.
+    - Channel 0: rows have frequencies ``[8, 16, 32, 64]`` cycles
+    - Channel 1: all rows at frequency 100 (constant)
+    - Channel 2: all rows at frequency 20 (constant)
+    Expected per-channel centroids (per-row mean of k/N): 30/N, 100/N,
+    20/N. Final = mean(30, 100, 20) / N · 2 / 3 = 100 / (3N).
     """
-    n_ch = 3
     N = 256
-    rows = 8
-    ks = jnp.asarray([10, 30, 60], dtype=jnp.int32)  # cycles per row, per channel
+    rows = 4
+    k_per_row_ch0 = [8, 16, 32, 64]
+    k_const_ch1 = 100
+    k_const_ch2 = 20
+    n_ch = 3
+
     t = jnp.arange(N, dtype=jnp.float32)
-    # signal shape (C, H, W) = (3, 8, 256)
-    per_channel_signal = jnp.stack(
-        [jnp.broadcast_to(jnp.sin(2.0 * jnp.pi * (k / N) * t), (rows, N)) for k in ks],
-        axis=0,
-    )
-    centroid = spectral_centroid(per_channel_signal, freq_axis=-1, channel_axis=0)
-    expected_per_channel = ks / N  # raw centroid per channel = k/N
-    expected = (jnp.mean(expected_per_channel) * 2.0) / n_ch
+    ch0 = jnp.stack([jnp.sin(2.0 * jnp.pi * (k / N) * t) for k in k_per_row_ch0], axis=0)
+    ch1 = jnp.stack([jnp.sin(2.0 * jnp.pi * (k_const_ch1 / N) * t) for _ in range(rows)], axis=0)
+    ch2 = jnp.stack([jnp.sin(2.0 * jnp.pi * (k_const_ch2 / N) * t) for _ in range(rows)], axis=0)
+    signal = jnp.stack([ch0, ch1, ch2], axis=0)  # (C=3, H=4, W=256)
+
+    centroid = spectral_centroid(signal, freq_axis=-1, channel_axis=0)
+    mean_per_channel = (sum(k_per_row_ch0) / rows + k_const_ch1 + k_const_ch2) / n_ch / N
+    expected = mean_per_channel * 2.0 / n_ch
     one_bin = 1.0 / N
     assert jnp.allclose(centroid, expected, atol=one_bin * 2.0), (
-        f"centroid={float(centroid)} expected≈{float(expected)} within one bin {one_bin}"
+        f"centroid={float(centroid)} expected≈{expected} within one bin {one_bin}"
     )
 
 
 def test_spectral_centroid_per_channel_then_mean_distinct_from_global_sum() -> None:
-    """Given: a multi-channel sinusoid where amplitude varies dramatically
-    between channels, so the per-channel-then-mean and global-sum-then-divide
-    conventions diverge.
+    """Given: a single-channel signal where rows have *different
+    amplitudes* AND *different frequencies*, so the per-row-then-mean
+    and global-sum-then-divide reductions diverge meaningfully.
 
-    When: comparing ondes' ``spectral_centroid`` to a synthetic
-    ``mean_c(centroid_c) · 2 / n_ch`` baseline.
-    Then: ondes matches the per-channel-then-mean baseline. A regression
-    that reverts to ``Σ_all f·|X| / Σ_all |X|`` would be biased toward the
-    high-amplitude channel's frequency.
+    When: comparing ondes' ``spectral_centroid`` to
+    ``_old_global_sum_centroid`` (the R1 pre-fix impl, kept inline as a
+    contrast oracle).
+    Then: the two impls produce materially different numbers — by
+    construction here, new ≈ 0.322 vs old ≈ 0.763.
 
-    Construction: channel 0 at low frequency with amplitude 1.0; channel
-    1 at high frequency with amplitude 100.0. Global-sum-then-divide
-    weights channel 1 ~100x more, so its centroid would be ≈ k1/N. The
-    correct per-channel mean is (k0/N + k1/N) / 2.
+    Why this matters: the R1 version of this test broadcast
+    *identical-amplitude* rows within each channel
+    (``jnp.broadcast_to``), which means amplitude cancelled in the
+    per-channel num/den reduction. The 100x cross-channel amplitude
+    ratio didn't matter because each channel was reduced
+    *independently*. R2 review flagged this as vacuous (A1, C1).
+
+    Correct construction: rows within a single channel have different
+    amplitudes correlated with different frequencies, so:
+    - Per-row-then-mean (NEW): uniform average ``(1/H) · Σ_r k_r/N``,
+      independent of amplitude.
+    - Global-sum-then-divide (OLD): amplitude-weighted
+      ``Σ_r amp_r·k_r / (N · Σ_r amp_r)`` (since the rFFT magnitude of
+      ``amp · sin(2π k t/N)`` is proportional to ``amp``).
+
+    With ``k_r = [5, 10, 50, 100]`` and ``amp_r = [1, 1, 1, 100]``
+    (high amp aligned with high freq):
+    - NEW = ((5+10+50+100)/4) / N · 2 / 1 = 165/512 ≈ 0.3223
+    - OLD = (1·5 + 1·10 + 1·50 + 100·100) / (256 · 103) · 2 ≈ 0.7634
+    The 0.44 gap dwarfs the one-bin tolerance (≈ 0.008).
     """
     N = 256
     rows = 4
-    k0, k1 = 10, 80
+    ks = [5, 10, 50, 100]
+    amps = [1.0, 1.0, 1.0, 100.0]
     t = jnp.arange(N, dtype=jnp.float32)
-    ch0 = jnp.broadcast_to(1.0 * jnp.sin(2.0 * jnp.pi * (k0 / N) * t), (rows, N))
-    ch1 = jnp.broadcast_to(100.0 * jnp.sin(2.0 * jnp.pi * (k1 / N) * t), (rows, N))
-    signal = jnp.stack([ch0, ch1], axis=-1)  # (rows, N, 2) with channel last
-    centroid = spectral_centroid(signal, freq_axis=-2, channel_axis=-1)
-
-    n_ch = 2
-    expected = ((k0 / N + k1 / N) / n_ch) * 2.0 / n_ch
-    global_sum_baseline = (k1 / N) * 2.0 / n_ch  # what we'd get if we collapsed everything
-
-    one_bin = 1.0 / N
-    assert jnp.allclose(centroid, expected, atol=one_bin * 2.0), (
-        f"centroid={float(centroid)} not matching per-channel-mean baseline {expected}"
+    rows_stack = jnp.stack(
+        [amps[r] * jnp.sin(2.0 * jnp.pi * (ks[r] / N) * t) for r in range(rows)],
+        axis=0,
     )
-    # And confirm the regression would be detectable: ondes should NOT match
-    # the global-sum-then-divide baseline at this amplitude ratio.
-    assert not jnp.allclose(centroid, global_sum_baseline, atol=one_bin * 5.0), (
-        f"centroid={float(centroid)} suspiciously close to global-sum baseline "
-        f"{global_sum_baseline}; per-channel-vs-global test is vacuous"
+    signal = rows_stack[..., None]  # (rows=4, N=256, channel=1)
+
+    centroid_new = spectral_centroid(signal, freq_axis=-2, channel_axis=-1)
+    centroid_old = _old_global_sum_centroid(signal, freq_axis=-2, channel_axis=-1)
+
+    expected_new = sum(ks) / rows / N * 2.0  # n_ch = 1
+    expected_old = sum(amps[r] * ks[r] for r in range(rows)) / (N * sum(amps)) * 2.0
+    one_bin = 1.0 / N
+
+    # New impl matches per-row-then-mean prediction
+    assert jnp.allclose(centroid_new, expected_new, atol=one_bin * 2.0), (
+        f"new centroid={float(centroid_new)} expected≈{expected_new}"
+    )
+    # Old impl matches the global-sum prediction (sanity check on the oracle)
+    assert abs(centroid_old - expected_old) < one_bin * 2.0, (
+        f"old oracle={centroid_old} expected≈{expected_old}; oracle drift suspected"
+    )
+    # And they differ — gap must dwarf the one-bin tolerance, otherwise the
+    # construction has gone vacuous again.
+    gap = abs(float(centroid_new) - centroid_old)
+    assert gap > 0.1, (
+        f"new={float(centroid_new)} and old={centroid_old} agree to within {gap}; "
+        f"test construction is vacuous, no distinguishing power between reductions"
     )
 
 
