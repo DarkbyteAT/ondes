@@ -447,9 +447,8 @@ def test_winner_reproducibility_under_same_key() -> None:
     Then: bit-equal. PRNG threading is deterministic.
     """
     key = jax.random.key(99)
-    args = dict(in_dim=2, hidden_dim=32, num_hidden_layers=3, key=key, s0=1.5, s1=0.2)
-    w1 = WINNER(**args)
-    w2 = WINNER(**args)
+    w1 = WINNER(in_dim=2, hidden_dim=32, num_hidden_layers=3, key=key, s0=1.5, s1=0.2)
+    w2 = WINNER(in_dim=2, hidden_dim=32, num_hidden_layers=3, key=key, s0=1.5, s1=0.2)
     leaves1 = jax.tree_util.tree_leaves(eqx.filter(w1, eqx.is_array))
     leaves2 = jax.tree_util.tree_leaves(eqx.filter(w2, eqx.is_array))
     assert len(leaves1) == len(leaves2)
@@ -583,9 +582,8 @@ def test_winner_canonicalises_out_features_one() -> None:
     the body and for downstream typing.
     """
     key = jax.random.key(0)
-    args = dict(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=key, s0=1.0, s1=0.1)
-    a = WINNER(**args, out_features=None)
-    b = WINNER(**args, out_features=1)
+    a = WINNER(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=key, s0=1.0, s1=0.1, out_features=None)
+    b = WINNER(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=key, s0=1.0, s1=0.1, out_features=1)
     assert jax.tree_util.tree_structure(a) == jax.tree_util.tree_structure(b)
 
 
