@@ -121,16 +121,140 @@ def test_spectral_centroid_zero_signal_returns_zero() -> None:
     assert float(centroid) == 0.0
 
 
-def test_spectral_centroid_dtype_preserved() -> None:
-    """Given: float32 vs float64 inputs.
+def test_spectral_centroid_dtype_preserved_float32() -> None:
+    """Given: a float32 input.
 
     When: calling spectral_centroid.
-    Then: output dtype matches input dtype — no silent up/down-cast deep
-    in the rFFT machinery.
+    Then: output dtype is float32 — no silent weak-promotion to float64
+    via the ``* 2.0`` normalisation factor (which is the trap pinned by
+    reviewer B; ``2.0`` is now built with ``jnp.asarray(2.0, signal.dtype)``
+    inside the function).
+
+    The float64 branch is covered by
+    ``test_spectral_centroid_dtype_preserved_float64`` under an
+    ``enable_x64`` context.
     """
     rng = np.random.default_rng(0)
     arr32 = jnp.asarray(rng.standard_normal((32, 32, 3)).astype(np.float32))
     assert spectral_centroid(arr32).dtype == jnp.float32
+
+
+def test_spectral_centroid_dtype_preserved_float64() -> None:
+    """Given: a float64 input under ``jax_enable_x64``.
+
+    When: calling spectral_centroid.
+    Then: output dtype is float64. Catches the dtype-downcast trap pinned
+    by reviewer B: an unguarded ``jnp.asarray(s, dtype=jnp.float32)`` or
+    ``centroid * 2.0`` would force the result back to float32 under x64
+    mode, silently dropping precision.
+
+    We toggle ``jax_enable_x64`` for the duration of this test via
+    ``jax.config.update``. The toggle is restored in a ``finally`` block
+    so the rest of the suite isn't affected.
+    """
+    prev = jax.config.read("jax_enable_x64")
+    try:
+        jax.config.update("jax_enable_x64", True)
+        rng = np.random.default_rng(0)
+        arr64 = jnp.asarray(rng.standard_normal((32, 32, 3)))  # numpy default is float64
+        assert arr64.dtype == jnp.float64, f"setup error: arr64.dtype={arr64.dtype}"
+        out = spectral_centroid(arr64)
+        assert out.dtype == jnp.float64, f"got {out.dtype} under jax_enable_x64=True"
+    finally:
+        jax.config.update("jax_enable_x64", prev)
+
+
+def test_spectral_centroid_nondefault_axes() -> None:
+    """Given: a (C, H, W) layout signal with ``channel_axis=0, freq_axis=-1``.
+
+    When: calling spectral_centroid.
+    Then: matches a hand-computed expected value built from the same
+    per-row-then-mean convention. Exercises the axis-resolution paths in
+    ``spectral_centroid`` that the default ``(-2, -1)`` test doesn't
+    touch.
+
+    Construction: three channels, each a single integer-cycle sinusoid
+    at a distinct frequency. Per-channel centroid (after the freq-axis
+    reduction) is then constant across rows, so the per-row-then-mean
+    collapse picks up the channel's own frequency exactly. Final result
+    is ``mean_c(f_c / N) · 2 / n_ch`` where ``N`` is signal length along
+    ``freq_axis``.
+    """
+    n_ch = 3
+    N = 256
+    rows = 8
+    ks = jnp.asarray([10, 30, 60], dtype=jnp.int32)  # cycles per row, per channel
+    t = jnp.arange(N, dtype=jnp.float32)
+    # signal shape (C, H, W) = (3, 8, 256)
+    per_channel_signal = jnp.stack(
+        [jnp.broadcast_to(jnp.sin(2.0 * jnp.pi * (k / N) * t), (rows, N)) for k in ks],
+        axis=0,
+    )
+    centroid = spectral_centroid(per_channel_signal, freq_axis=-1, channel_axis=0)
+    expected_per_channel = ks / N  # raw centroid per channel = k/N
+    expected = (jnp.mean(expected_per_channel) * 2.0) / n_ch
+    one_bin = 1.0 / N
+    assert jnp.allclose(centroid, expected, atol=one_bin * 2.0), (
+        f"centroid={float(centroid)} expected≈{float(expected)} within one bin {one_bin}"
+    )
+
+
+def test_spectral_centroid_per_channel_then_mean_distinct_from_global_sum() -> None:
+    """Given: a multi-channel sinusoid where amplitude varies dramatically
+    between channels, so the per-channel-then-mean and global-sum-then-divide
+    conventions diverge.
+
+    When: comparing ondes' ``spectral_centroid`` to a synthetic
+    ``mean_c(centroid_c) · 2 / n_ch`` baseline.
+    Then: ondes matches the per-channel-then-mean baseline. A regression
+    that reverts to ``Σ_all f·|X| / Σ_all |X|`` would be biased toward the
+    high-amplitude channel's frequency.
+
+    Construction: channel 0 at low frequency with amplitude 1.0; channel
+    1 at high frequency with amplitude 100.0. Global-sum-then-divide
+    weights channel 1 ~100x more, so its centroid would be ≈ k1/N. The
+    correct per-channel mean is (k0/N + k1/N) / 2.
+    """
+    N = 256
+    rows = 4
+    k0, k1 = 10, 80
+    t = jnp.arange(N, dtype=jnp.float32)
+    ch0 = jnp.broadcast_to(1.0 * jnp.sin(2.0 * jnp.pi * (k0 / N) * t), (rows, N))
+    ch1 = jnp.broadcast_to(100.0 * jnp.sin(2.0 * jnp.pi * (k1 / N) * t), (rows, N))
+    signal = jnp.stack([ch0, ch1], axis=-1)  # (rows, N, 2) with channel last
+    centroid = spectral_centroid(signal, freq_axis=-2, channel_axis=-1)
+
+    n_ch = 2
+    expected = ((k0 / N + k1 / N) / n_ch) * 2.0 / n_ch
+    global_sum_baseline = (k1 / N) * 2.0 / n_ch  # what we'd get if we collapsed everything
+
+    one_bin = 1.0 / N
+    assert jnp.allclose(centroid, expected, atol=one_bin * 2.0), (
+        f"centroid={float(centroid)} not matching per-channel-mean baseline {expected}"
+    )
+    # And confirm the regression would be detectable: ondes should NOT match
+    # the global-sum-then-divide baseline at this amplitude ratio.
+    assert not jnp.allclose(centroid, global_sum_baseline, atol=one_bin * 5.0), (
+        f"centroid={float(centroid)} suspiciously close to global-sum baseline "
+        f"{global_sum_baseline}; per-channel-vs-global test is vacuous"
+    )
+
+
+def test_winner_schedule_zero_centroid_gives_zero_scales() -> None:
+    """Given: a zero centroid.
+
+    When: calling ``WinnerSchedule.image().scales(0.0, n_channels)``.
+    Then: both ``s0`` and ``s1`` are exactly 0 — the WINNER perturbation
+    is the identity for an all-zero target. Boundary case from
+    ``WINNER.from_signal(jnp.zeros(...), ...)``: ``spectral_centroid``
+    returns 0 by the zero-safe divide, schedule must propagate that to
+    zero scales so the resulting WINNER is bit-equal to a vanilla SIREN
+    init.
+    """
+    sched = WinnerSchedule.image()
+    s0, s1 = sched.scales(jnp.asarray(0.0, dtype=jnp.float32), n_channels=3)
+    assert float(s0) == 0.0
+    assert float(s1) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -428,14 +552,54 @@ def test_winner_forward_scalar_shape() -> None:
     assert y.shape == ()
 
 
+def test_winner_vector_readout_shape() -> None:
+    """Given: WINNER with ``out_features=4``.
+
+    When: forward-passing on a coord.
+    Then: output shape ``(4,)``. Locks the ``out_features`` forwarding
+    path through ``__init__`` → ``_validate_body_args`` → ``_build_readout``
+    for WINNER (mirrors the corresponding FINER / BACON test).
+    """
+    w = WINNER(
+        in_dim=2,
+        hidden_dim=16,
+        num_hidden_layers=3,
+        key=jax.random.key(0),
+        s0=1.0,
+        s1=0.1,
+        out_features=4,
+    )
+    y = w(jnp.array([0.1, -0.2]))
+    assert y.shape == (4,)
+
+
+def test_winner_canonicalises_out_features_one() -> None:
+    """Given: two WINNERs differing only in ``out_features`` (``None`` vs ``1``).
+
+    When: comparing pytree structure.
+    Then: identical. ``_validate_body_args`` canonicalises ``1`` to
+    ``None`` so the two scalar-yielding constructions produce
+    structurally identical pytrees — load-bearing for vmap / scan over
+    the body and for downstream typing.
+    """
+    key = jax.random.key(0)
+    args = dict(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=key, s0=1.0, s1=0.1)
+    a = WINNER(**args, out_features=None)
+    b = WINNER(**args, out_features=1)
+    assert jax.tree_util.tree_structure(a) == jax.tree_util.tree_structure(b)
+
+
 def test_winner_rejects_one_hidden_layer() -> None:
     """Given: num_hidden_layers=1.
 
     When: constructing.
-    Then: assertion fires — WINNER needs at least two hidden layers to
-    perturb (layer 0 and layer 1).
+    Then: ``ValueError`` (not ``AssertionError``) fires — WINNER needs at
+    least two hidden layers to perturb (layer 0 and layer 1).
+    ``ValueError`` survives ``python -O`` (assertions would be stripped),
+    matching the ``_check_film_shape`` precedent in
+    ``ondes.basis._base``.
     """
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="num_hidden_layers >= 2"):
         WINNER(in_dim=2, hidden_dim=16, num_hidden_layers=1, key=jax.random.key(0), s0=1.0, s1=0.1)
 
 
@@ -450,34 +614,35 @@ def test_winner_layer1_preactivation_var_scales_with_s1_squared() -> None:
     When: pushing inputs ``x ~ U(-1, 1)^{d_in}`` through layer-0 sine then
     layer-1 linear, measuring ``Var[omega_hidden · pre1]`` (the actual sine
     argument).
-    Then: variance is linear in ``s1²`` with slope ``d_h / 2`` — that's
-    the WINNER contribution to Theorem 3.1's prediction
-    ``Var[ω · pre1] = C + d_h · s1² / 2``. The intercept ``C`` is the
-    SIREN-prior variance (the constant ``3`` in the paper's literal
-    formula assumes a variance convention different from ondes' init —
-    measured intercept is closer to ``1`` for ondes' bound) so we test
-    the slope, not the constant.
+    Then: variance is linear in ``s1²`` with slope ``d_h / 2``. That's the
+    WINNER contribution to Theorem 3.1's prediction
+    ``Var[ω · pre1] = C + d_h · s1² / 2``. The intercept ``C`` under
+    ondes' SIREN init is ``≈ 1`` (not the paper's ``3``) — the discrepancy
+    is documented in ``WINNER_DECISIONS.md`` item 7. The test asserts the
+    slope only — that's the WINNER-specific load-bearing quantity.
 
-    Why the slope is the load-bearing quantity: the SIREN-prior intercept
-    is independent of WINNER; the term that explicitly encodes WINNER's
-    perturbation is ``d_h · s1² / 2``. A regression that drops the noise
-    scaling (e.g. uses ``s1`` instead of ``s1 / omega_hidden``, or
-    perturbs the wrong layer) would change the slope, not the intercept.
+    Clean derivation (matches ``WINNER_DECISIONS.md`` item 7):
 
-    Sketch of why slope = ``d_h / 2``:
-    - Layer-0 sine output is approximately U(-1, 1)^{d_h} under SIREN's
-      variance-preserving init, so each ``h_j`` has Var[h_j] = 1/3.
-    - Layer-1 weight ``W_{ij} ~ U(-c, c) + N(0, (s1/ω)²)``, so
+    - Layer-0 sine output is uniform-phase so ``Var[h_j] ≈ 1/2``.
+    - Layer-1 weight ``W_{ij} ~ U(-c, c) + N(0, (s1/ω)²)`` is i.i.d., so
       ``E[W_{ij}²] = c²/3 + (s1/ω)²``.
-    - Pre-activation ``pre1_i = Σ_j W_{ij} · h_j`` so
-      ``Var[ω · pre1_i] = ω² · d_h · (c²/3 + (s1/ω)²) · 1/3 =
-      (ω²·c²·d_h)/9 + d_h · s1² / 3``.
-    - The constants ``c = sqrt(6/d_h)/ω`` and the prefactor work out to
-      ``(2 · d_h / d_h)·(1/3) = 2/3`` for the SIREN part. The empirical
-      slope on ``s1²`` lands at ``d_h / 2`` — close to the paper's
-      ``d_h / 2`` claim. The minor factor-of-(3/2) discrepancy between
-      this back-of-envelope and the empirical slope is absorbed by
-      treating Var[h_j] empirically rather than as exactly 1/3.
+    - ``pre1_i = Σ_j W_{ij} · h_j`` sums ``d_h`` independent zero-mean
+      terms, so ``Var[ω · pre1_i] = ω² · d_h · E[W²] · Var[h]
+      = ω² · d_h · (c²/3 + (s1/ω)²) · (1/2)``.
+    - With ``c² = 6 / (d_h · ω²)``, ``ω² · d_h · c² / 3 = 2``, so the
+      deterministic part contributes ``1`` (= empirical intercept).
+    - The noise part contributes ``d_h · s1² / 2`` (= empirical slope on
+      ``s1²``).
+
+    Tolerance: sample variance of a sum of ``d_h = 256`` near-Gaussian
+    products over N = 50k samples has standard error ≈ var · sqrt(2/N).
+    For ``y_max ≈ 130`` (at ``s1 = 1``) this is ``σ ≈ 0.8``. Propagating
+    through ``np.polyfit`` with 6 well-spread design points gives a
+    slope standard error of order ``2 σ / span(s1²) ≈ 1.5``, so the
+    expected slope `d_h / 2 = 128` lives in a roughly ``±3`` 1σ band.
+    We assert ``|slope - d_h/2| < 0.05 · (d_h/2) = 6.4`` (≈ 4σ, comfortable
+    structural bound that catches any wrong-axis / wrong-divisor regression
+    which would change the slope by tens of percent or flip its sign).
     """
     in_dim, hidden_dim, omega_h = 2, 256, 30.0
     n_HL = 4
@@ -503,15 +668,14 @@ def test_winner_layer1_preactivation_var_scales_with_s1_squared() -> None:
     y = np.asarray(measured_vars)
     slope, intercept = np.polyfit(s1_sq, y, 1)
     expected_slope = hidden_dim / 2.0
-    # MC band on a sample variance estimate of a Gaussian-ish quantity is
-    # roughly var · sqrt(2/N). For y_max ≈ 130 and N=50k, σ ≈ 0.8;
-    # propagating through the linear fit over 6 points gives a slope
-    # tolerance of ~1-2. We pick 5% relative as a comfortable structural
-    # bound.
     rel_tol = 0.05
     assert abs(slope - expected_slope) < rel_tol * expected_slope, (
         f"slope={slope:.2f}, expected {expected_slope:.2f}; intercept={intercept:.3f}, measured={measured_vars}"
     )
+    # Sanity-check the slope's sign — guards against a regression that
+    # makes variance shrink with s1 (which a sign-flip in the noise
+    # standardisation would produce).
+    assert slope > 0.0, f"non-positive slope {slope} suggests a sign-flip regression"
 
 
 # ---------------------------------------------------------------------------
