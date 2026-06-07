@@ -46,25 +46,25 @@ trap explicitly; the regression test
 `test_winner_reset_noise_rebuilds_not_double_perturbs` directly verifies
 this.
 
-## 5. Sibling Module, not subclass of SIREN
+## 5. Sibling to SIREN, subclass of `Body`
 
-`WINNER(eqx.Module)` is a top-level Module that holds its own `layers`
-field (plus the construction params needed for `reset_noise`). It does
-**not** subclass `ondes.basis.SIREN`. Rationale: subclassing locks the
-WINNER pytree shape to SIREN's evolving `__init__` and field set, which
-makes a future SIREN-internal refactor break WINNER without warning. The
-forward pass is identical to SIREN's so we share the implementation via a
-free `_winner_forward` helper rather than inheritance.
+`WINNER` does **not** subclass `ondes.basis.SIREN`. Rationale: subclassing
+SIREN would lock the WINNER pytree shape to SIREN's evolving `__init__`
+and field set, so any future internal SIREN refactor would silently
+ripple into WINNER. The forward pass is identical to SIREN's, but it's
+identical because both bodies use stacked `SIRENLayer` s, not because
+WINNER *is-a* SIREN.
 
-WINNER deliberately does **not** subclass `ondes.basis._base.Body` either.
-Body requires `(layers, readout_W, readout_b, out_features, hidden_dim,
-num_hidden_layers)` and exposes a `trunk`/`__call__` contract intended for
-basis-MLP bodies. Reusing it would force WINNER's pytree to carry the same
-fields, which is fine, but the `s0`, `s1`, `omega_first`, `omega_hidden`,
-and the construction params that `reset_noise` reads have no natural home
-on Body. We satisfy the structural `BasisModule` protocol (same `trunk`
-and `__call__` signature) so WINNER is usable in any context that already
-accepted a `Body`.
+`WINNER` **does** subclass `ondes.basis._base.Body`. That's the public
+extension point the docstring on `Body` explicitly invites: "Subclass this
+directly to implement a new basis family". `Body` owns `layers`,
+`readout_W`, `readout_b`, `out_features`, `hidden_dim`,
+`num_hidden_layers`, plus the shared `trunk` / `__call__` / `_readout` /
+`_check_film_shape` machinery — which is exactly the contract WINNER
+satisfies and the surface downstream consumers (loom, fws) type-annotate
+against. We add `s0`, `s1`, `omega_first`, `omega_hidden`, and the
+construction params (`in_dim`) needed for `reset_noise` as additional
+fields on top.
 
 ## 6. No module-level `WINNER_AUDIO`/`WINNER_IMAGE` constants
 

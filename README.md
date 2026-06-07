@@ -1,6 +1,6 @@
 # ondes
 
-Functional implementations of implicit neural representations (SIREN, H-SIREN, WIRE) in JAX/Equinox.
+Functional implementations of implicit neural representations (SIREN, H-SIREN, WIRE, FINER, MFN, RFF, BACON, PNF, WINNER) in JAX/Equinox.
 
 ## Installation
 
@@ -16,7 +16,7 @@ pip install ondes
 
 ## Composition
 
-`ondes` ships the basis-MLP trunks (`SIREN`, `HSIREN`, `WIRE`) and the spectral init machinery. Anything post-trunk — distribution heads, parameterisations, rotation maps, vector fields, loss-specific transforms — lives in user code, wrapped around a concrete body inside your own `eqx.Module`. Type-annotate against the `ondes.Body` base class if your wrapper should accept any basis kind:
+`ondes` ships the basis-MLP trunks (`SIREN`, `HSIREN`, `WIRE`, `FINER`, MFN variants, `RFF`, `BACON`, `PNF`, `WINNER`) and the spectral init machinery. `WINNER` (arXiv 2509.09719) is a SIREN init variant that perturbs the first two linear-layer weights with Gaussian noise scaled by the target signal's spectral centroid — pair it with `WinnerSchedule.audio()` or `WinnerSchedule.image()` via `WINNER.from_signal(target, schedule, ...)` for the paper-canonical regimes. Anything post-trunk — distribution heads, parameterisations, rotation maps, vector fields, loss-specific transforms — lives in user code, wrapped around a concrete body inside your own `eqx.Module`. Type-annotate against the `ondes.Body` base class if your wrapper should accept any basis kind:
 
 ```python
 import equinox as eqx

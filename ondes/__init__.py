@@ -12,6 +12,7 @@ from ondes.basis import (
     PNF,
     RFF,
     SIREN,
+    WINNER,
     WIRE,
     Basis,
     BasisModule,
@@ -22,8 +23,10 @@ from ondes.basis import (
     HSIRENLayer,
     RFFLayer,
     SIRENLayer,
+    WinnerSchedule,
     WIRELayer,
     siren_init,
+    spectral_centroid,
 )
 from ondes.encoding import (
     Dyadic,
@@ -56,8 +59,11 @@ __all__ = [
     "RFFLayer",
     "SIREN",
     "SIRENLayer",
+    "WINNER",
     "WIRE",
     "WIRELayer",
+    "WinnerSchedule",
     "nyquist_sigma",
     "siren_init",
+    "spectral_centroid",
 ]
