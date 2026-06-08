@@ -121,16 +121,19 @@ def spectral_centroid(
     2. weight bins by ``rfftfreq(n_freq, d=1)`` and reduce **only** along
        ``freq_axis`` to form a per-slice numerator and denominator
     3. compute the per-slice centroid as ``num / den`` (zero-safe)
-    4. mean over all remaining non-channel axes → one centroid per channel
-    5. mean across channels
-    6. multiply by 2, divide by ``n_channels``
+    4. take a uniform mean over the per-slice centroid (equivalent to the
+       reference's "mean over rows / slices, then mean over channels" —
+       arithmetic mean over uniform-shape tensors is commutative)
+    5. multiply by 2, divide by ``n_channels``
 
-    The per-slice-then-average step (3 → 4) is intentional: the reference's
-    2-D image branch (``ndim==2``) sums along the row axis to get a
-    per-row centroid, then ``np.mean`` over rows. Summing globally first
-    (``Σf·|X| / Σ|X|`` over all axes) gives an energy-weighted average
-    that biases toward high-amplitude rows, deviating from the reference
-    by a few percent on row-scaled toys.
+    The per-slice-then-mean step (3 → 4) is the load-bearing distinction
+    from a naive global-sum reduction: the reference's 2-D image branch
+    (``ndim==2``) sums along the row axis to get a per-row centroid, then
+    ``np.mean`` over rows. Summing globally first (``Σf·|X| / Σ|X|`` over
+    all axes) gives an energy-weighted average that biases toward
+    high-amplitude rows, deviating from the reference. The
+    ``test_spectral_centroid_per_channel_then_mean_distinct_from_global_sum``
+    test in the suite carries an inline old-impl oracle that pins this.
 
     The schedule (:meth:`WinnerSchedule.scales`) divides by
     ``n_channels`` *again* — the double-divide is intentional and the
@@ -188,25 +191,23 @@ def spectral_centroid(
     # Reduce along the rfft axis ONLY — gives a per-slice (num, den) pair.
     # Reference's 2-D branch sums along axis=1 to get one centroid per row,
     # then averages rows; the 3-D branch sums along axis=2 to get one
-    # centroid per slice, then averages slices. We collapse both into a
-    # single per-freq-axis reduction followed by a mean across all other
-    # non-channel axes (i.e. rows for 2-D, slices for 3-D).
+    # centroid per slice, then averages slices.
     num = jnp.sum(weighted, axis=freq_axis)
     den = jnp.sum(spectrum, axis=freq_axis)
     per_slice = jnp.where(den != 0, num / jnp.where(den != 0, den, 1.0), 0.0)
 
-    # After the freq_axis reduction the spectrum has spectrum.ndim - 1 axes.
-    # The original channel_axis may now sit at a different position; resolve
-    # it into a non-negative index in the original ndim, then shift by 1 if
-    # freq_axis was earlier in the ordering.
-    norm_channel_axis = channel_axis % spectrum.ndim
-    norm_freq_axis = freq_axis % spectrum.ndim
-    new_channel_axis = norm_channel_axis if norm_channel_axis < norm_freq_axis else norm_channel_axis - 1
-
-    remaining_axes = tuple(ax for ax in range(per_slice.ndim) if ax != new_channel_axis)
-    per_channel = jnp.mean(per_slice, axis=remaining_axes) if remaining_axes else per_slice
-
-    centroid = jnp.mean(per_channel)
+    # The reference's "per-channel mean over rows / slices, then mean over
+    # channels" is mathematically equivalent to a single uniform-weight mean
+    # over ``per_slice`` for every rank we accept (rank-1 audio, rank-2
+    # image, rank-3 volume). Arithmetic mean over uniform-shape tensors is
+    # commutative, so the two-step channel-then-row reduction collapses to
+    # a single ``jnp.mean(per_slice)``. The earlier channel-axis-resolution
+    # branch was shown to be dead code in the round-3 review: the
+    # off-by-one was undetectable through the scalar output by construction.
+    # ``n_channels`` is taken from ``signal.shape[channel_axis]`` upstream,
+    # so the final ``/ n_channels`` still uses the user's intended channel
+    # axis even though the reduction here is uniform.
+    centroid = jnp.mean(per_slice)
     two = jnp.asarray(2.0, signal.dtype)
     return cast(Float[Array, ""], (centroid * two) / n_channels)
 

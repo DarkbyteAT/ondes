@@ -174,10 +174,9 @@ def _old_global_sum_centroid(signal: jax.Array, *, freq_axis: int = -2, channel_
     """Reference impl of the R1 (pre-fix) ``spectral_centroid``.
 
     Kept locally as a *contrast oracle* for
-    ``test_spectral_centroid_per_channel_then_mean_distinct_from_global_sum``
-    and ``test_spectral_centroid_nondefault_axes_distinguishes_per_row``:
-    those tests must produce materially different numbers under this
-    function vs the current per-slice-then-mean impl. If the difference
+    ``test_spectral_centroid_per_channel_then_mean_distinct_from_global_sum``:
+    that test must produce a materially different number under this
+    function vs the current per-slice-then-mean impl. If the gap
     collapses, the regression test has gone vacuous (as it did in R1 —
     see the round-2 review batch).
     """
@@ -197,44 +196,49 @@ def _old_global_sum_centroid(signal: jax.Array, *, freq_axis: int = -2, channel_
     return float((centroid * 2.0) / n_channels)
 
 
-def test_spectral_centroid_nondefault_axes_distinguishes_per_row() -> None:
-    """Given: a (C, H, W) layout signal with ``channel_axis=0, freq_axis=-1``,
-    where channel 0's rows carry *different* per-row frequencies.
+def test_spectral_centroid_works_under_nondefault_axes() -> None:
+    """Given: a ``(C, H, W)`` layout signal with ``channel_axis=0,
+    freq_axis=-1`` (the reference's 2-D image branch transposed).
 
-    When: calling spectral_centroid.
-    Then: matches the hand-computed per-row-then-mean expected value, AND
-    materially differs from the old global-sum-per-channel reduction
-    (verified inline via ``_old_global_sum_centroid``). The varying
-    per-row frequency is what makes channel 0's per-row centroid
-    non-constant across rows; a regression in the channel-axis
-    resolution at ``winner.py:204`` (the
-    ``new_channel_axis = norm_channel_axis if norm_channel_axis <
-    norm_freq_axis else norm_channel_axis - 1`` line) would either
-    mis-reduce or pick up the wrong axis and produce a different number.
+    When: calling spectral_centroid with explicit non-default axes.
+    Then: matches the hand-computed expected value. Happy-path coverage
+    for the non-default axis kwargs — exercises the rFFT-along-an-
+    arbitrary-axis path and the ``n_channels = signal.shape[channel_axis]``
+    lookup at a non-trailing position.
 
-    Construction: 3 channels, 4 rows, N=256 samples per row.
-    - Channel 0: rows have frequencies ``[8, 16, 32, 64]`` cycles
-    - Channel 1: all rows at frequency 100 (constant)
-    - Channel 2: all rows at frequency 20 (constant)
-    Expected per-channel centroids (per-row mean of k/N): 30/N, 100/N,
-    20/N. Final = mean(30, 100, 20) / N · 2 / 3 = 100 / (3N).
+    Construction: 3 channels, 4 rows of varying integer-cycle frequencies,
+    N=256 samples per row. Single uniform-weight mean over the per-slice
+    centroid gives ``mean_all(k_all) / N · 2 / n_ch``. We pick distinct
+    per-row, per-channel frequencies so the test isn't accidentally a
+    pure single-frequency check.
+
+    Note: this is a happy-path test, not a discriminator for the
+    channel-axis-resolution branch. The round-3 review established that
+    such a branch is dead code under uniform-weight mean over uniform-
+    shape inputs (commutativity collapses any branch flip into the same
+    scalar), so ``spectral_centroid`` no longer carries one — the test
+    simply confirms the function works under the documented non-default
+    axis kwargs.
     """
     N = 256
-    rows = 4
-    k_per_row_ch0 = [8, 16, 32, 64]
-    k_const_ch1 = 100
-    k_const_ch2 = 20
+    # All frequencies must stay strictly below Nyquist (N/2 = 128). A bin
+    # above Nyquist aliases under rFFT, which would silently throw the
+    # hand-computed expected value off.
+    ks_ch0 = [8, 16, 32, 64]
+    ks_ch1 = [120, 50, 50, 50]
+    ks_ch2 = [40, 40, 40, 100]
     n_ch = 3
+    assert max(ks_ch0 + ks_ch1 + ks_ch2) < N // 2, "test frequencies must stay below Nyquist"
 
     t = jnp.arange(N, dtype=jnp.float32)
-    ch0 = jnp.stack([jnp.sin(2.0 * jnp.pi * (k / N) * t) for k in k_per_row_ch0], axis=0)
-    ch1 = jnp.stack([jnp.sin(2.0 * jnp.pi * (k_const_ch1 / N) * t) for _ in range(rows)], axis=0)
-    ch2 = jnp.stack([jnp.sin(2.0 * jnp.pi * (k_const_ch2 / N) * t) for _ in range(rows)], axis=0)
+    ch0 = jnp.stack([jnp.sin(2.0 * jnp.pi * (k / N) * t) for k in ks_ch0], axis=0)
+    ch1 = jnp.stack([jnp.sin(2.0 * jnp.pi * (k / N) * t) for k in ks_ch1], axis=0)
+    ch2 = jnp.stack([jnp.sin(2.0 * jnp.pi * (k / N) * t) for k in ks_ch2], axis=0)
     signal = jnp.stack([ch0, ch1, ch2], axis=0)  # (C=3, H=4, W=256)
 
     centroid = spectral_centroid(signal, freq_axis=-1, channel_axis=0)
-    mean_per_channel = (sum(k_per_row_ch0) / rows + k_const_ch1 + k_const_ch2) / n_ch / N
-    expected = mean_per_channel * 2.0 / n_ch
+    all_ks = ks_ch0 + ks_ch1 + ks_ch2
+    expected = (sum(all_ks) / len(all_ks)) / N * 2.0 / n_ch
     one_bin = 1.0 / N
     assert jnp.allclose(centroid, expected, atol=one_bin * 2.0), (
         f"centroid={float(centroid)} expected≈{expected} within one bin {one_bin}"
