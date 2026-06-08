@@ -17,6 +17,10 @@ build/
 # Reproducible from CLI + config.json; not source.
 runs/
 
+# Validation script artifacts (scripts/validate_winner_astronaut.py).
+# Numbers and recon PNGs are posted in PR comments, not tracked in the repo.
+validation_astronaut/
+
 # Claude Code ephemeral state
 .claude/worktrees/
 .superpowers/
