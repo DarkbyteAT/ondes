@@ -139,6 +139,25 @@ def test_first_layer_reduces_to_integer_harmonic_sine() -> None:
     assert bool(jnp.allclose(got, jnp.sin((m + 1) * x), atol=EPS * k))
 
 
+def test_first_layer_per_edge_coordinate_association() -> None:
+    # Given: a 2-input, 1-output first layer with hand-picked coefficients that
+    # isolate one cosine term on input dim 0 (harmonic 1) and one sine term on
+    # input dim 1 (harmonic 2), plus a non-zero bias
+    layer = FKANFirstLayer(in_dim=2, out_dim=1, n_freqs=2, key=jax.random.key(40))
+    a = jnp.zeros((1, 2, 2)).at[0, 0, 0].set(1.0)  # cos(1 * x_0)
+    b = jnp.zeros((1, 2, 2)).at[0, 1, 1].set(1.0)  # sin(2 * x_1)
+    layer = eqx.tree_at(lambda t: (t.A, t.B, t.bias), layer, (a, b, jnp.array([0.5])))
+    # When: evaluating on DISTINCT coordinates
+    x = jnp.array([0.2, -0.5])
+    got = layer(x)[0]
+    # Then: it equals the hand-computed sum. Every other value test uses in_dim=1,
+    # so a per-edge mis-association (wrong input-dim ↔ coefficient-slice pairing, or
+    # an x_0/x_1 swap) at equal tensor shape passes them all but fails here — the
+    # coordinates and the selected harmonics are deliberately distinct.
+    expected = 0.5 + jnp.cos(1.0 * x[0]) + jnp.sin(2.0 * x[1])
+    assert bool(jnp.allclose(got, expected, atol=16 * EPS))
+
+
 # --------------------------------------------------------------------------- #
 # 3. hidden layer: init bound + the two activation forms                      #
 # --------------------------------------------------------------------------- #
@@ -225,6 +244,55 @@ def test_layernorm_flag_changes_output_and_pytree() -> None:
     assert plain_body.layernorm is None
     ln_leaves = [leaf for leaf in jax.tree_util.tree_leaves(ln_body.layernorm) if eqx.is_array(leaf)]
     assert len(ln_leaves) == 2  # learnable weight + bias
+    # Placement: the LayerNorm is sized to the first-layer output width (hidden_dim),
+    # confirming it normalises the feature-map output, not some other tensor.
+    assert ln_body.layernorm.shape == (16,)
+
+
+def test_paper_text_config_forward_passes_without_layernorm_or_gating() -> None:
+    # Given: an FKAN body in the combined paper-text config (Eq. 4 tanh, no norm)
+    # When: forward-passing
+    # Then: it produces a finite scalar, carries no LayerNorm, and no hidden layer
+    # is gated — the two flags compose (the smoke that the non-default corner runs).
+    body = FKAN(
+        in_dim=2,
+        hidden_dim=8,
+        num_hidden_layers=2,
+        key=jax.random.key(41),
+        gated_activation=False,
+        use_layernorm=False,
+    )
+    y = body(jnp.array([0.1, -0.2]))
+    assert y.shape == ()
+    assert bool(jnp.isfinite(y))
+    assert body.layernorm is None
+    assert not any(layer.gated for layer in body.layers)
+
+
+def test_omega_mask_freezes_hidden_omega_under_optimiser_step() -> None:
+    # Given: the documented freeze recipe eqx.partition(body, body.omega_mask())
+    # When: running one real SGD step on the learnable partition
+    # Then: every hidden-layer omega is unchanged (it was partitioned out and never
+    # stepped) while a non-omega leaf actually moves. Pins the docstring's fixed-ω₀
+    # recipe as tested behaviour, not just prose.
+    import optax
+
+    body = FKAN(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.key(42))
+    coord = jnp.array([0.3, -0.4])
+    learnable, frozen = eqx.partition(body, body.omega_mask())
+    opt = optax.sgd(0.1)
+    opt_state = opt.init(learnable)
+
+    def loss(learn, c):
+        return (eqx.combine(learn, frozen)(c) - 1.0) ** 2
+
+    grads = eqx.filter_grad(loss)(learnable, coord)
+    updates, _ = opt.update(grads, opt_state, learnable)
+    new_body = eqx.combine(eqx.apply_updates(learnable, updates), frozen)
+
+    for old, new in zip(body.layers, new_body.layers, strict=True):
+        assert float(old.omega) == float(new.omega), "frozen omega moved under the optimiser step"
+    assert not bool(jnp.allclose(body.first.A, new_body.first.A)), "no non-omega leaf moved — step was a no-op"
 
 
 def test_default_config_reproduces_released_code() -> None:

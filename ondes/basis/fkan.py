@@ -47,13 +47,24 @@ Two paper-vs-code divergences, both behind flags (both change the forward pass):
   u)$; the shipped code uses the gated $(u + \tanh(\omega_0 u))\,\sigma(u)$
   instead. They differ; label arms explicitly.
 
-**Default configuration reproduces the paper's *reported results*, not its
-written equations.** ``gated_activation=True`` and ``use_layernorm=True`` are the
-released-code configuration whose parameter count matches Table I's 436,367 and
-whose numbers are the paper's headline 37.91 dB. Set ``gated_activation=False,
-use_layernorm=False`` for the paper-text-faithful $\tanh(\omega_0 u)$-with-no-norm
-variant. This split is deliberate: the canonical *results* come from the code, so
-the default follows the code and the docstring names the paper-text form.
+**Default configuration reproduces the paper's *reported-result* mechanism, not
+its written equations.** ``gated_activation=True`` and ``use_layernorm=True`` are
+the released-code configuration behind the paper's headline 37.91 dB. This
+follows the imported-baseline defaults rule: a reimplemented baseline defaults to
+the configuration that reproduces the paper's *reported results*, with the
+paper-text form (``gated_activation=False, use_layernorm=False`` — plain
+$\tanh(\omega_0 u)$, no norm) behind flags. The split is deliberate: the canonical
+*results* come from the code, so the default follows the code and the docstring
+names the paper-text form.
+
+This port reproduces FKAN's *mechanism* at a uniform ``hidden_dim`` — the exact
+first-layer per-edge coefficient count $2 K\, d_\text{in}\,\text{hidden}$ (Table
+I's 138,240 at the canonical $K = 270$, $d_\text{in} = 2$, width 128), pinned in
+the tests. It does **not** reproduce the paper's 436,367-parameter *total*: that
+comes from the paper's non-uniform trunk (widths 128, 256, 256, 256, 512), which
+this uniform-width ``Body`` API does not express. Match a parameter budget
+downstream by choosing ``hidden_dim`` / ``n_freqs``, not by expecting this class
+to mirror the paper's width schedule.
 
 Initialisation of the Fourier coefficients — $A, B \sim \mathcal{N}(0, 1/(d_\text{in}
 K))$, bias zeros — is **not stated in the paper**; it is inherited from the
@@ -63,17 +74,32 @@ divisor is code-only; the paper omits it), reused from
 :func:`ondes.basis.siren.siren_init`.
 
 FKAN has **no SIREN special case** — the hidden activation is $\tanh$-based, not
-sinusoidal, so there is no $c = e_0$ corner analogous to the comb family. The
-hidden-layer $\omega_0$ is stored as a learnable leaf (the ``Basis`` convention),
-even though the paper treats it as a fixed hyperparameter; freeze it with
-``eqx.partition`` if strict paper fidelity is wanted, the same pattern RFF/BACON
-use for their frozen parameters.
+sinusoidal, so there is no $c = e_0$ corner analogous to the comb family.
+
+The hidden-layer $\omega_0$ is stored as a learnable leaf (the ``Basis``
+convention), which **departs by default from the paper's fixed $\omega_0 = 30$**.
+Two cautions follow. First, the ``Basis`` ABC justifies direct (non-log)
+parameterisation of ``omega`` by the activations being *even* in ``omega`` (sin,
+sinh-then-sin, cos), so its sign is immaterial — that argument does **not**
+transfer here: $\tanh(\omega_0 u)$ and the gated form are *odd* in $\omega_0$, so
+a trainable $\omega_0$ can drift in magnitude *and flip sign*, changing the
+activation. Second, to recover the paper's fixed-$\omega_0$ regime, freeze the
+``omega`` leaves before the optimiser step with
+``eqx.partition(body, body.omega_mask())`` (see :meth:`FKAN.omega_mask`) — the
+same frozen-parameter pattern RFF/BACON use. A head-to-head harness must pin one
+regime across arms (freeze $\omega_0$ on the FKAN arm, or train it on all arms).
+
+The linear readout reuses :func:`ondes.basis.siren._build_readout` at the body's
+*true* ``hidden_dim`` fan-in. This is a conscious divergence from the reference
+code, which hardcodes a fan-in of 128 in the readout bound even when the last
+hidden width differs; the true fan-in is the more principled variance-preserving
+choice and is intentional here.
 """
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Key
+from jaxtyping import Array, Float, Key, PyTree
 
 from ondes.basis._base import Basis, Body, _validate_body_args
 from ondes.basis.siren import _build_readout, siren_init
@@ -99,9 +125,12 @@ class FKANFirstLayer(eqx.Module):
     n_freqs`` coefficients — per-edge granularity, finer than per-neuron.
 
     Carries ``A`` (cosine) and ``B`` (sine) coefficient tensors of shape
-    ``(out_dim, in_dim, n_freqs)`` and a per-output ``bias``. This is a plain
-    feature map (no ``W, b, omega`` triple, no pointwise ``_activate``), so it is
-    an ``eqx.Module`` rather than a ``Basis`` subclass — analogous to
+    ``(out_dim, in_dim, n_freqs)`` and a per-output ``bias``. (Note: the paper's
+    Eq. 3 letters them the other way — ``a_k`` on ``sin``, ``b_k`` on ``cos``;
+    here ``A`` is the cosine coefficient and ``B`` the sine, which reads more
+    naturally against the ``cos``/``sin`` call order.) This is a plain feature map
+    (no ``W, b, omega`` triple, no pointwise ``_activate``), so it is an
+    ``eqx.Module`` rather than a ``Basis`` subclass — analogous to
     :class:`~ondes.basis.mfn.FourierFilter` and
     :class:`~ondes.basis.bacon.BACONFilter`.
     """
@@ -257,6 +286,22 @@ class FKAN(Body):
         self.out_features = out_features
         self.hidden_dim = hidden_dim
         self.num_hidden_layers = num_hidden_layers
+
+    def omega_mask(self) -> PyTree:
+        r"""Return a pytree mask selecting the learnable (non-``omega``) leaves.
+
+        Use with ``eqx.partition(body, body.omega_mask())`` to split the body into
+        ``(learnable, frozen)`` halves before an optimiser step, holding every
+        hidden layer's ``omega`` fixed at its initial value. This recovers the
+        paper's fixed $\omega_0 = 30$ regime — the trainable-leaf default departs
+        from it (see the module docstring). Symmetric with
+        :meth:`ondes.basis.rff.RFF.fix_encoding_mask` and
+        :meth:`ondes.basis.bacon.BACON.fix_filters_mask`.
+        """
+        # Start from "everything learnable", then flip each hidden layer's omega off.
+        mask = jax.tree_util.tree_map(lambda x: eqx.is_array(x), self)
+        frozen_layers = tuple(eqx.tree_at(lambda la: la.omega, m, False) for m in mask.layers)
+        return eqx.tree_at(lambda b: b.layers, mask, frozen_layers)
 
     def trunk(
         self,
