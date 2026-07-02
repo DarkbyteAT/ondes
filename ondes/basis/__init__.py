@@ -17,6 +17,7 @@ from ondes.basis.mfn import FourierMFN, GaborMFN
 from ondes.basis.pnf import PNF
 from ondes.basis.rff import RFF, RFFLayer
 from ondes.basis.siren import SIREN, SIRENLayer, siren_init
+from ondes.basis.staf import STAF, STAFLayer
 from ondes.basis.wire import WIRE, WIRELayer
 
 
@@ -42,6 +43,8 @@ __all__ = [
     "RFFLayer",
     "SIREN",
     "SIRENLayer",
+    "STAF",
+    "STAFLayer",
     "WIRE",
     "WIRELayer",
     "siren_init",

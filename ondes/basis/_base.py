@@ -16,10 +16,13 @@ from jaxtyping import Array, Float
 class Basis(eqx.Module):
     """ABC for a single basis-MLP layer.
 
-    Holds the linear weights ``(W, b)`` and the learnable frequency scalar
-    ``omega`` shared by every basis. Subclasses provide ``_activate(pre)`` to
-    produce the post-activation output. Basis-specific fields (e.g. ``s`` for
-    WIRE) live on the concrete subclass, not here.
+    Holds the linear weights ``(W, b)`` and a frequency scalar ``omega`` carried
+    by every basis. Most bases learn ``omega`` and read it in ``_activate``
+    (SIREN's ``sin(omega * pre)``); some treat it as an init-only scale the
+    forward pass never reads (RFF's placeholder ``1.0``, STAF's frozen
+    ``omega_0``). Subclasses provide ``_activate(pre)`` to produce the
+    post-activation output. Basis-specific fields (e.g. ``s`` for WIRE) live on
+    the concrete subclass, not here.
 
     The ``Basis`` ABC is exported so downstream code (renderers, optimisers,
     test helpers) can express "any basis layer" in a single type. It is not
