@@ -212,6 +212,22 @@ def test_gradient_flows_to_learnable_leaves(body_cls: type, leaf_name: str) -> N
         assert bool(jnp.any(layer.omega != 0.0)), f"layer {i} omega grad all-zero"
 
 
+@pytest.mark.unit
+def test_gradient_through_normalisation_is_finite_at_near_zero_row() -> None:
+    # Given: a HarmonicComb layer with one raw_c row driven to exactly zero —
+    # the gauge-pathology point where plain x/||x|| gives a NaN gradient
+    # When: taking the gradient of _activate through the sphere normalisation
+    # Then: every gradient stays finite. The eps-floored _unit_normalize is what
+    # makes this hold; a bare jnp.linalg.norm denominator would NaN here.
+    layer = HarmonicCombLayer(in_dim=1, out_dim=4, omega_init=2.0, is_first=True, key=jax.random.key(30))
+    zeroed = layer.raw_c.at[0].set(0.0)
+    layer = eqx.tree_at(lambda t: t.raw_c, layer, zeroed)
+    pre = jnp.array([0.3, -0.4, 0.5, 0.7])
+
+    grad = eqx.filter_grad(lambda la, p: la._activate(p).sum())(layer, pre)
+    assert bool(jnp.all(jnp.isfinite(grad.raw_c))), "normalisation grad non-finite at zero row"
+
+
 # --------------------------------------------------------------------------- #
 # 4. pytree homogeneity across layers (scan/vmap compatibility)               #
 # --------------------------------------------------------------------------- #

@@ -120,12 +120,31 @@ def _sn_direction(m: Float[Array, "..."], n_terms: int, m_eps: float) -> Float[A
     return qn ** (n + 0.5) / (1.0 - qn ** (2.0 * n + 1.0))
 
 
+def _unit_normalize(x: Float[Array, "... n"]) -> Float[Array, "... n"]:
+    """L2-normalise rows with an eps-floored denominator (NaN-safe at ``x = 0``).
+
+    Plain ``x / ||x||`` has a gauge pathology on the coefficient sphere: the
+    gradient is NaN at ``x = 0`` and scales as ``1/||x||``, exploding as a row
+    shrinks. Flooring the squared norm at ``finfo(dtype).eps`` — the scale below
+    which the row's direction is numerically meaningless anyway — bounds both.
+    The distortion on a genuine unit row (``sum(x^2) = 1``) is ``~eps/2``,
+    negligible. This may bear on HarmonicComb's documented late-training
+    instability (https://trello.com/c/3bNOZ8QQ); empirical confirmation pending.
+    """
+    eps = jnp.finfo(x.dtype).eps
+    return x / jnp.sqrt(jnp.sum(x * x, axis=-1, keepdims=True) + eps)
+
+
 def _sn_unit_coeffs(m: Float[Array, "..."], n_terms: int, m_eps: float) -> Float[Array, "... n"]:
     """``sn`` harmonic shape renormalised to ``||c||_2 = 1`` per row.
 
     Same relative harmonic content as ``sn(., m)`` up to a per-neuron scale the
     next linear layer absorbs. Holding ``||c|| = 1`` is the load-bearing
     invariant that pins ``Var[phi] = 1/2`` across variants (see module docstring).
+
+    Uses the eps-floored :func:`_unit_normalize`: the ``sn`` direction ``d`` can
+    underflow to zero when the nome ``q`` underflows at extreme ``m_eps``, which
+    a bare norm would turn into a divide-by-zero.
 
     Args:
         m: Elliptic parameter, any shape ``(...)``.
@@ -135,8 +154,7 @@ def _sn_unit_coeffs(m: Float[Array, "..."], n_terms: int, m_eps: float) -> Float
     Returns:
         Unit-norm coefficient rows of shape ``(..., n_terms)``.
     """
-    d = _sn_direction(m, n_terms, m_eps)
-    return d / jnp.linalg.norm(d, axis=-1, keepdims=True)
+    return _unit_normalize(_sn_direction(m, n_terms, m_eps))
 
 
 def _odd_freqs(n_terms: int, omega: Float[Array, ""]) -> Float[Array, "n"]:
@@ -346,7 +364,7 @@ class HarmonicCombLayer(Basis):
 
     def _activate(self, pre: Float[Array, "out"]) -> Float[Array, "out"]:
         """Sum the sphere-normalised comb ``sum_k c_k sin((2k+1) omega * pre)``."""
-        c = self.raw_c / jnp.linalg.norm(self.raw_c, axis=-1, keepdims=True)
+        c = _unit_normalize(self.raw_c)
         f = _odd_freqs(self.n_terms, self.omega)
         return jnp.sum(c * jnp.sin(f * pre[..., None]), axis=-1)
 
