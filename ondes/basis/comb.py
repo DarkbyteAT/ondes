@@ -34,6 +34,12 @@ peers of ``siren_init`` — there is no intermediate comb ABC. Each variant is a
 direct :class:`~ondes.basis._base.Basis` / :class:`~ondes.basis._base.Body`
 subclass computing the comb inline in ``_activate``.
 
+Choosing between them: ``JacobiLearnM`` is the constrained 1-D ``sn`` dial (each
+neuron moves only along the ``sn`` curve — fewer degrees of freedom, stable);
+``HarmonicComb`` frees the coefficients onto the full unit sphere (more
+expressive, but shows late-training instability under Adam and is not yet
+validated as an FWS weight-generator basis). Start with ``JacobiLearnM``.
+
 Constraints (both variants):
     Per-neuron learnable activation parameters are known to *hurt* at depth
     (``num_hidden_layers >= 8``): the extra gradient-noise dimension dilutes
@@ -48,6 +54,18 @@ from jaxtyping import Array, Float, Key
 
 from ondes.basis._base import Basis, Body, _validate_body_args
 from ondes.basis.siren import _build_readout, siren_init
+
+
+def _validate_n_terms(n_terms: int) -> int:
+    """Reject ``n_terms < 1`` (mirrors ``_validate_body_args``'s layer check).
+
+    A non-positive ``n_terms`` gives an empty harmonic row, whose norm is 0 —
+    which would propagate as a silent NaN through :func:`_sn_unit_coeffs` and the
+    forward comb. ``assert`` matches the ``_validate_body_args`` convention in
+    ``_base.py`` for constructor-arg preconditions.
+    """
+    assert n_terms >= 1, f"n_terms must be >= 1, got {n_terms}"
+    return int(n_terms)
 
 
 # ---- sn q-series + frequency builders (shared by both comb variants) --------
@@ -227,7 +245,7 @@ class JacobiLearnMLayer(Basis):
         self.W, self.b = siren_init(in_dim, out_dim, omega_init, is_first, init_key)
         self.omega = jnp.array(float(omega_init))
         self.raw_m = jax.random.normal(m_key, (out_dim,)) * spread
-        self.n_terms = int(n_terms)
+        self.n_terms = _validate_n_terms(n_terms)
         self.m_eps = float(m_eps)
 
     def _activate(self, pre: Float[Array, "out"]) -> Float[Array, "out"]:
@@ -355,7 +373,7 @@ class HarmonicCombLayer(Basis):
         init_key, c_key = jax.random.split(key)
         self.W, self.b = siren_init(in_dim, out_dim, omega_init, is_first, init_key)
         self.omega = jnp.array(float(omega_init))
-        self.n_terms = int(n_terms)
+        self.n_terms = _validate_n_terms(n_terms)
         if m0_spread > 0.0:
             m0_vec = jnp.clip(m0 + m0_spread * jax.random.normal(c_key, (out_dim,)), m_eps, 1.0 - m_eps)
         else:
@@ -410,7 +428,11 @@ class HarmonicComb(Body):
             omega_hidden: Initial fundamental frequency for subsequent layers.
             n_terms: Comb capacity (sphere dimension) per neuron.
             m0: Modulus seeding the init comb direction (pure sine at ``m0 -> 0``,
-                harmonic-rich near ``m0 -> 1``).
+                harmonic-rich near ``m0 -> 1``). Values outside ``(0, 1)``
+                saturate silently at the endpoints (clipped to
+                ``[m_eps, 1 - m_eps]`` inside the q-series); this is intended —
+                ``m0 = 0`` is the documented pure-sine corner — so it is not
+                rejected.
             m0_spread: Per-neuron Gaussian spread of ``m0`` at init; ``0`` seeds
                 every neuron identically.
             m_eps: Clip margin keeping ``m0`` off the singular endpoints.

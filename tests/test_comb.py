@@ -373,3 +373,14 @@ def test_jacobi_learn_m_and_harmonic_comb_are_distinct_types() -> None:
     assert type(hc) is HarmonicComb
     assert type(jl.layers[0]) is JacobiLearnMLayer
     assert type(hc.layers[0]) is HarmonicCombLayer
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body_cls", [JacobiLearnM, HarmonicComb])
+def test_comb_body_rejects_non_positive_n_terms(body_cls: type) -> None:
+    # Given: a request to build a comb body with n_terms=0
+    # When: constructing
+    # Then: it is rejected. n_terms<1 yields an empty harmonic row whose norm is
+    # 0, which would otherwise propagate as a silent NaN through the forward comb.
+    with pytest.raises(AssertionError):
+        body_cls(in_dim=2, hidden_dim=8, num_hidden_layers=2, key=jax.random.key(0), n_terms=0)
