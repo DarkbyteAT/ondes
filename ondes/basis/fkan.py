@@ -81,9 +81,10 @@ convention), which **departs by default from the paper's fixed $\omega_0 = 30$**
 Two cautions follow. First, the ``Basis`` ABC justifies direct (non-log)
 parameterisation of ``omega`` by the activations being *even* in ``omega`` (sin,
 sinh-then-sin, cos), so its sign is immaterial — that argument does **not**
-transfer here: $\tanh(\omega_0 u)$ and the gated form are *odd* in $\omega_0$, so
-a trainable $\omega_0$ can drift in magnitude *and flip sign*, changing the
-activation. Second, to recover the paper's fixed-$\omega_0$ regime, freeze the
+transfer here: $\tanh(\omega_0 u)$ is odd in $\omega_0$, and the gated form is not
+*even* in $\omega_0$ (its $\tanh$ term is odd), so $\omega_0$'s sign is not
+immaterial and a trainable $\omega_0$ can drift in magnitude *and flip sign*,
+changing the activation. Second, to recover the paper's fixed-$\omega_0$ regime, freeze the
 ``omega`` leaves before the optimiser step with
 ``eqx.partition(body, body.omega_mask())`` (see :meth:`FKAN.omega_mask`) — the
 same frozen-parameter pattern RFF/BACON use. A head-to-head harness must pin one
