@@ -33,6 +33,19 @@ moment matching, Theorem 3.1), holding in distribution at ``t = 0`` under the
 free phases; HarmonicComb instead re-projects ``c`` onto the unit sphere every
 forward pass, a for-all-time constraint.
 
+**Paper/code amplitude-scale discrepancy.** The amplitudes are drawn as
+``amp_i = sign(X)*sqrt(|X|)`` with ``X ~ Laplace(0, 2/tau)``, giving
+``E[amp^2] = 2/tau``. That ``2/tau`` is the paper's own value — Theorem 3.1 and
+its Eq. 3 density ``f(c) = (tau|c|/2) e^{-tau c^2/2}`` both integrate to
+``E[C^2] = 2/tau`` — and it is what yields the claimed exact ``N(0,1)``
+post-activations (``tau * E[C^2] * 1/2 = 1``). The released reference
+(``AlirezaMorsali/STAF``, ``modules/staf.py``) instead samples
+``Laplace(0, 1/(2*tau))`` (``E[amp^2] = 1/(2*tau)``, a factor of 4 lower), which
+drops the post-activation variance to ``1/4`` and so breaks the exact-``N(0,1)``
+property that init section claims. This implementation follows the theorem (the
+published method); a downstream ablation wanting the code-faithful variant can
+overwrite ``amp`` via ``eqx.tree_at`` rather than adding an init-scale flag.
+
 **Canonical-defaults trap.** STAF's canonical image config uses ``omega_0 = 30``
 at *every* layer (Appendix C.10 of the v3 TMLR paper: "We set W_0 (or omega_0 in
 the code) to 30"), so the defaults here are ``omega_first = omega_hidden = 30.0``
