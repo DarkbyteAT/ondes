@@ -48,7 +48,7 @@ def _build(body_cls: type[ondes.Body]) -> ondes.Body:
 
 @pytest.mark.parametrize("body_cls", _BODY_CLASSES)
 def test_trunk_rejects_film_of_wrong_shape(body_cls: type[ondes.Body]) -> None:
-    # Given: a tiny body of one of the ten shipped basis kinds; a coord;
+    # Given: a tiny body of one of the shipped basis kinds; a coord;
     # and a FiLM tensor whose shape disagrees with the expected
     # (num_hidden_layers, 2 * hidden_dim) = (2, 16). Use (3, 16) as the
     # bad shape — wrong on the leading axis, same dtype/strides so the
