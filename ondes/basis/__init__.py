@@ -11,6 +11,7 @@ from ondes.basis._base import Basis, BasisModule, Body
 from ondes.basis.bacon import BACON
 from ondes.basis.comb import HarmonicComb, HarmonicCombLayer, JacobiLearnM, JacobiLearnMLayer
 from ondes.basis.finer import FINER, FINERLayer
+from ondes.basis.fkan import FKAN, FKANHiddenLayer
 from ondes.basis.hsiren import HSIREN, HSIRENLayer
 from ondes.basis.mfn import FourierMFN, GaborMFN
 from ondes.basis.pnf import PNF
@@ -26,6 +27,8 @@ __all__ = [
     "Body",
     "FINER",
     "FINERLayer",
+    "FKAN",
+    "FKANHiddenLayer",
     "FourierMFN",
     "GaborMFN",
     "HSIREN",

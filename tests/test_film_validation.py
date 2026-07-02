@@ -23,6 +23,7 @@ _BODY_CLASSES = (
     ondes.HSIREN,
     ondes.WIRE,
     ondes.FINER,
+    ondes.FKAN,
     ondes.RFF,
     ondes.BACON,
     ondes.PNF,
