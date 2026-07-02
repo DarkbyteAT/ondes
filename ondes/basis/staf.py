@@ -45,8 +45,9 @@ Note on ``omega``: the ``Basis`` ABC's ``omega`` scalar holds STAF's per-layer
 ``omega_0`` — the init frequency scale, consumed only at construction (the
 :func:`~ondes.basis.siren.siren_init` weight bound and the ``freq`` init
 ``omega_0 * U[0, 1)``). STAF's forward pass reads the learnable ``freq`` vector,
-never ``omega``, so ``omega`` receives zero gradient and stays fixed at
-``omega_0`` throughout training. The learnable frequencies live in ``freq``.
+never ``omega``, so ``omega`` receives zero gradient under gradient descent and
+is inert at forward time regardless of its value. The learnable frequencies live
+in ``freq``.
 
 MLP weights use SIREN uniform init (:func:`~ondes.basis.siren.siren_init`). The
 paper specifies no weight-init scheme — Theorem 3.1 is deliberately
@@ -138,7 +139,8 @@ class STAFLayer(Basis):
     The inherited ``omega`` scalar holds ``omega_0``, the init frequency scale.
     It is read only at construction (the :func:`~ondes.basis.siren.siren_init`
     weight bound and the ``freq`` init); the forward pass uses the learnable
-    ``freq`` vector, so ``omega`` gets zero gradient and is fixed after init.
+    ``freq`` vector, so ``omega`` gets zero gradient and is inert at forward time
+    regardless of its value.
 
     ``amp``/``freq``/``phase`` are ``(tau,)`` and ``tau`` is equal across a body's
     layers, so the per-layer pytree structure stays homogeneous
@@ -191,8 +193,18 @@ class STAF(Body):
 
     **Canonical defaults:** ``omega_first = omega_hidden = 30.0`` — STAF's image
     ``omega_0`` from every layer (v3 TMLR paper, App. C.10), *not* ondes' SIREN
-    ``6.0`` / ``1.0``. Override for non-image configs (audio ``3000`` first /
-    ``30`` hidden; denoising ``5``; the paper uses ``tau=2`` for denoising).
+    ``6.0`` / ``1.0``. Here ``omega_0`` does double duty — the ``siren_init``
+    weight bound *and* the ``freq`` init scale ``omega_0 * U[0, 1)`` — so the
+    ondes house ``1.0`` would also mis-initialise ``freq`` to ``[0, 1)`` (a
+    different method, not merely a different house style). Override for non-image
+    configs (audio ``3000`` first / ``30`` hidden; denoising ``5``; the paper
+    uses ``tau=2`` for denoising).
+
+    **Warning — the default protects single-arm reproduction only, never a
+    controlled comparison.** A head-to-head against SIREN/FINER/comb must set
+    ``omega_first`` / ``omega_hidden`` *explicitly and identically* on every arm;
+    relying on each body's own default silently confounds the activation-family
+    effect with an ``omega`` mismatch.
     """
 
     def __init__(

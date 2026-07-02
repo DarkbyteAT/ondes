@@ -144,6 +144,44 @@ def test_activation_reduces_to_harmonic_comb_on_odd_lattice() -> None:
     assert jnp.allclose(staf._activate(pre), hc._activate(pre), atol=tol)
 
 
+@pytest.mark.unit
+def test_phase_enters_inside_the_sine_with_correct_sign() -> None:
+    # Given: a STAF layer forced to (tau=1, amp=[1], freq=[0], phase=[pi/2]).
+    # When: evaluating _activate on any pre.
+    # Then: it is exactly 1.0 for every input, since sin(0*pre + pi/2) = 1. Both
+    # reduction oracles zero the phase, so a phase bug — added OUTSIDE the sine
+    # (=> pi/2), sign-flipped (sin(-pi/2) => -1), or doubled (sin(pi) => 0) —
+    # ships green there but fails here. Pins forward-faithfulness of the phase
+    # (released repo: bs * sin(ws*u + phis)).
+    layer = STAFLayer(in_dim=1, out_dim=4, omega_init=30.0, is_first=True, key=jax.random.key(22), tau=1)
+    layer = eqx.tree_at(
+        lambda t: (t.amp, t.freq, t.phase),
+        layer,
+        (jnp.ones(1), jnp.zeros(1), jnp.array([jnp.pi / 2])),
+    )
+    pre = jnp.array([-0.9, -0.1, 0.3, 0.8])
+    tol = jnp.finfo(pre.dtype).eps * 16
+    assert jnp.allclose(layer._activate(pre), jnp.ones_like(pre), atol=tol)
+
+
+@pytest.mark.unit
+def test_amp_is_unconstrained_output_scales_linearly() -> None:
+    # Given: a STAF layer and a scalar k.
+    # When: scaling amp by k (freq/phase/pre fixed).
+    # Then: the activation scales by exactly k — _activate is linear in amp, with
+    # NO norm re-projection. This pins STAF's deliberate no-sphere-constraint
+    # contract (the load-bearing difference from HarmonicComb): a regression to
+    # unit-normalised amp would make the output invariant to k, passing every
+    # other test but failing here.
+    k = 3.7
+    layer = STAFLayer(in_dim=1, out_dim=4, omega_init=30.0, is_first=True, key=jax.random.key(23), tau=5)
+    pre = jnp.array([0.3, -0.4, 0.5, 0.7])
+    base = layer._activate(pre)
+    scaled = eqx.tree_at(lambda t: t.amp, layer, layer.amp * k)
+    tol = jnp.finfo(pre.dtype).eps * 16 * k
+    assert jnp.allclose(scaled._activate(pre), k * base, atol=tol)
+
+
 # --------------------------------------------------------------------------- #
 # 3. per-layer sharing (one triple per layer, not per neuron)                 #
 # --------------------------------------------------------------------------- #
