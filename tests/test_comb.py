@@ -32,7 +32,7 @@ from ondes.basis import (
     JacobiLearnM,
     JacobiLearnMLayer,
 )
-from ondes.basis.comb import _q_K, _sn_unit_coeffs
+from ondes.basis.comb import _odd_freqs, _q_K, _sn_unit_coeffs
 
 
 BODY_LAYER_PAIRS = ((JacobiLearnM, JacobiLearnMLayer), (HarmonicComb, HarmonicCombLayer))
@@ -150,6 +150,19 @@ def test_unit_coeffs_are_normalised_faithful_coeffs(m: float) -> None:
     assert jnp.allclose(unit, normalised, atol=1e-3)
 
 
+@pytest.mark.unit
+def test_odd_freqs_are_odd_multiples_of_omega() -> None:
+    # Given: the defining odd-harmonic spacing [omega, 3 omega, 5 omega, ...]
+    # When: calling _odd_freqs directly
+    # Then: it equals omega * (2k + 1). This is the load-bearing formula behind
+    # every comb forward pass, yet the nesting/ellipj tests only exercise the
+    # fundamental (k=0) or reimplement 2k+1 themselves — a 2k+1 -> 2k typo would
+    # otherwise pass the whole suite. Pins the library formula directly.
+    omega = jnp.array(2.5)
+    freqs = _odd_freqs(6, omega)
+    assert jnp.allclose(freqs, 2.5 * (2.0 * jnp.arange(6) + 1.0))
+
+
 # --------------------------------------------------------------------------- #
 # 2. variance preservation at init                                            #
 # --------------------------------------------------------------------------- #
@@ -184,6 +197,34 @@ def test_init_output_is_finite(layer_cls: type) -> None:
     y = layer(jnp.linspace(-1.0, 1.0, 4))
     assert y.shape == (16,)
     assert bool(jnp.all(jnp.isfinite(y)))
+
+
+@pytest.mark.unit
+def test_output_finite_in_harmonic_rich_regime() -> None:
+    # Given: a JacobiLearnM layer driven to the harmonic-rich corner (raw_m=+20
+    # => sigmoid(m) ~ 1, clipped to 1 - m_eps)
+    # When: forward-passing
+    # Then: output is finite. Exercises the UPPER clip in _q_K (q -> 1 is a NaN
+    # singularity at m = 1); only the lower clip (SIREN corner) was covered
+    # elsewhere, so a broken/removed upper clip would NaN only here.
+    layer = JacobiLearnMLayer(in_dim=4, out_dim=16, omega_init=6.0, is_first=True, key=jax.random.key(9))
+    layer = eqx.tree_at(lambda t: t.raw_m, layer, jnp.full_like(layer.raw_m, 20.0))
+    y = layer(jnp.linspace(-1.0, 1.0, 4))
+    assert bool(jnp.all(jnp.isfinite(y)))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("layer_cls", [JacobiLearnMLayer, HarmonicCombLayer])
+def test_n_terms_one_degenerates_to_fundamental_sine(layer_cls: type) -> None:
+    # Given: a comb layer with n_terms=1 (the domain floor the advocate's
+    # n_terms>=1 assert bounds) — a single-harmonic comb over a length-1 axis
+    # When: comparing _activate to sin(omega * pre)
+    # Then: it is exactly the fundamental sine. n_terms=1 forces c = [1] after
+    # unit-normalisation, so the comb collapses to SIREN. Exercises the
+    # normalise-over-a-length-1-axis path (a keepdims/axis slip would break it).
+    layer = layer_cls(in_dim=1, out_dim=4, omega_init=2.0, is_first=True, key=jax.random.key(10), n_terms=1)
+    pre = jnp.array([0.3, -0.4, 0.5, 0.7])
+    assert jnp.allclose(layer._activate(pre), jnp.sin(2.0 * pre), atol=1e-6)
 
 
 # --------------------------------------------------------------------------- #
