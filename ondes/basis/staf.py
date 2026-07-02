@@ -97,6 +97,17 @@ def _staf_init(
     by $2/\tau$ sets the scale, since $\mathbb{E}|bZ| = b$ for
     $Z \sim \mathrm{Laplace}(0, 1)$.
 
+    Note — paper/code discrepancy on the amplitude scale. The v3 TMLR paper's
+    Theorem 3.1 and its Eq. 3 density $f(c)=(\tau|c|/2)e^{-\tau c^2/2}$ both give
+    $\mathbb{E}[C^2]=2/\tau$, so we use $\mathrm{Laplace}(0, 2/\tau)$. The
+    released reference (``AlirezaMorsali/STAF``, ``modules/staf.py``) instead
+    samples $\mathrm{Laplace}(0, 1/(2\tau))$, giving $\mathbb{E}[C^2]=1/(2\tau)$
+    — a factor of 4 below the theorem, which drops the post-activation variance
+    to $1/4$ and so breaks the exact-$\mathcal{N}(0,1)$ property that init
+    section claims. We follow the theorem (the published method); a downstream
+    ablation wanting the code-faithful variant can overwrite ``amp`` via
+    ``eqx.tree_at`` rather than adding an init-scale flag.
+
     Args:
         tau: Number of sinusoidal terms in the activation (``>= 1``).
         omega_0: Frequency scale for the ``freq`` init (``30`` canonical for images).
