@@ -168,23 +168,27 @@ def test_odd_freqs_are_odd_multiples_of_omega() -> None:
 # --------------------------------------------------------------------------- #
 @pytest.mark.unit
 @pytest.mark.parametrize("layer_cls", [JacobiLearnMLayer, HarmonicCombLayer])
-def test_init_variance_is_one_half_per_neuron(layer_cls: type) -> None:
-    # Given: a freshly-initialised comb layer with omega high enough to be in
-    # the wrapping regime (omega * std(pre) >> 1), fed unit-variance pre-acts
+# omega=1.0 is the default operating point (sin-arg std ~1): Var sits at plain
+# SIREN's ~0.44, NOT 1/2. omega=30 is the wrapping regime where Var -> 1/2. The
+# two bands make prose and test agree on scope: the unit-norm invariant holds
+# everywhere, but the *value* is omega-dependent (a coefficient-norm regression
+# would move both bands, not just one).
+@pytest.mark.parametrize("omega,expected", [(1.0, 0.44), (30.0, 0.50)])
+def test_init_variance_matches_regime(layer_cls: type, omega: float, expected: float) -> None:
+    # Given: a freshly-initialised comb layer at a given omega, fed unit-variance
+    # pre-activations
     # When: computing the per-neuron variance of _activate over many samples
-    # Then: Var[phi_j] ~= 1/2 for every neuron. This is the invariant that lets
-    # the SIREN-family init carry over unchanged: unit-norm coefficients +
-    # wrapping give (1/2)*||c_j||^2 = 1/2. A coefficient-norm regression (rows
-    # not on the unit sphere) would move this off 1/2.
+    # Then: Var[phi_j] lands in the omega-appropriate band. unit-norm coeffs give
+    # Var = (1/2)*||c_j||^2 * (per-term factor); the per-term sin variance is ~0.43
+    # at omega=1 (SIREN's value) and ~0.5 once the sin argument wraps.
     out_dim = 128
-    layer = layer_cls(in_dim=3, out_dim=out_dim, omega_init=30.0, is_first=False, key=jax.random.key(0))
+    layer = layer_cls(in_dim=3, out_dim=out_dim, omega_init=omega, is_first=False, key=jax.random.key(0))
     pre = jax.random.normal(jax.random.key(1), (8192, out_dim))
-    out = jax.vmap(layer._activate)(pre)
-    per_neuron_var = out.var(axis=0)
-    # atol 0.05: finite-sample (8192) std of a variance estimate plus the small
-    # O(exp(-omega^2)) wrapping-regime correction. A structural break (missing
-    # normalisation) would land near ||raw||^2 / 2, well outside this band.
-    assert jnp.allclose(per_neuron_var, 0.5, atol=0.05), f"mean Var {float(per_neuron_var.mean())}"
+    per_neuron_var = jax.vmap(layer._activate)(pre).var(axis=0)
+    # atol 0.02: finite-sample (8192) spread of the variance estimate. Bands are
+    # 0.02 apart at worst; a structural break (rows off the unit sphere) lands
+    # near ||raw||^2 / 2, well outside either band.
+    assert jnp.allclose(per_neuron_var, expected, atol=0.02), f"mean Var {float(per_neuron_var.mean())}"
 
 
 @pytest.mark.unit
@@ -267,6 +271,23 @@ def test_gradient_through_normalisation_is_finite_at_near_zero_row() -> None:
 
     grad = eqx.filter_grad(lambda la, p: la._activate(p).sum())(layer, pre)
     assert bool(jnp.all(jnp.isfinite(grad.raw_c))), "normalisation grad non-finite at zero row"
+
+
+@pytest.mark.unit
+def test_gradient_at_upper_modulus_corner_is_dead_zone() -> None:
+    # Given: a JacobiLearnM layer driven to the harmonic-rich corner (raw_m=+20)
+    # When: taking the gradient of _activate w.r.t. raw_m
+    # Then: it is exactly 0 — sigmoid saturation plus the _q_K upper clip make
+    # the modulus a gradient dead-zone there. Documented, inherent behaviour
+    # (symmetric with the near-zero-row finiteness test above): a neuron pinned
+    # at m~1 stops learning its shape. Finite here is not enough; the point is
+    # that it is *zero*, so this asserts the dead-zone rather than just finiteness.
+    layer = JacobiLearnMLayer(in_dim=1, out_dim=4, omega_init=2.0, is_first=True, key=jax.random.key(31))
+    layer = eqx.tree_at(lambda t: t.raw_m, layer, jnp.full_like(layer.raw_m, 20.0))
+    pre = jnp.array([0.3, -0.4, 0.5, 0.7])
+
+    grad = eqx.filter_grad(lambda la, p: la._activate(p).sum())(layer, pre)
+    assert bool(jnp.all(grad.raw_m == 0.0)), "expected a modulus dead-zone (grad 0) at raw_m=+20"
 
 
 # --------------------------------------------------------------------------- #

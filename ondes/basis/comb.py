@@ -21,10 +21,12 @@ init variance: under unit-variance pre-activations each ``sin`` term has varianc
 
     Var[phi_j] ~= (1/2) * ||c_j||^2 = 1/2
 
-for every neuron. This holds at the SIREN operating point (sin-argument std ~1),
-not only in the large-``omega`` limit. SIREN's depth fixed point is preserved as
-the comb reshapes, so the same SIREN-family init
-(:func:`ondes.basis.siren.siren_init`) applies unchanged.
+for every neuron — approached in the wrapping regime (large ``omega * std(pre)``).
+At the default ``omega_hidden=1.0`` the sin-argument std is ~1 and the measured
+per-neuron Var sits near 0.44, matching plain SIREN (a lone ``sin`` at ``omega=1``
+gives 0.432); it reaches ~0.50 from ``omega`` ~6 up. The comb never *degrades*
+SIREN's init variance, so SIREN's depth fixed point and the same SIREN-family init
+(:func:`ondes.basis.siren.siren_init`) carry over unchanged.
 
 This family covers periodic *odd* functions only: ``sn``'s ``m -> 1`` limit is
 ``tanh`` (aperiodic, outside any finite sine comb), so ``m`` is clipped strictly
