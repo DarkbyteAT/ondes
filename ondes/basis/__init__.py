@@ -9,6 +9,7 @@ submodules are an implementation detail.
 
 from ondes.basis._base import Basis, BasisModule, Body
 from ondes.basis.bacon import BACON
+from ondes.basis.comb import HarmonicComb, HarmonicCombLayer, JacobiLearnM, JacobiLearnMLayer
 from ondes.basis.finer import FINER, FINERLayer
 from ondes.basis.hsiren import HSIREN, HSIRENLayer
 from ondes.basis.mfn import FourierMFN, GaborMFN
@@ -29,6 +30,10 @@ __all__ = [
     "GaborMFN",
     "HSIREN",
     "HSIRENLayer",
+    "HarmonicComb",
+    "HarmonicCombLayer",
+    "JacobiLearnM",
+    "JacobiLearnMLayer",
     "PNF",
     "RFF",
     "RFFLayer",
