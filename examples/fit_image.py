@@ -11,6 +11,7 @@ basis takes, no shared discriminator. Pick a subcommand to pick a basis:
     uv run python examples/fit_image.py rff  --image cat.png --sigma 10 --num-freqs 256
     uv run python examples/fit_image.py bacon --image cat.png --max-freq 256
     uv run python examples/fit_image.py finer --image cat.png
+    uv run python examples/fit_image.py fkan  --image cat.png --n-freqs 270
     uv run python examples/fit_image.py fourier-mfn --image cat.png
     uv run python examples/fit_image.py gabor-mfn   --image cat.png
     uv run python examples/fit_image.py pnf         --image cat.png
@@ -844,6 +845,71 @@ def finer(
         output_dir=output_dir,
         seed=seed,
         basis_extras={"omega": omega, "first_bias_scale": first_bias_scale},
+    )
+
+
+@app.command()
+def fkan(
+    image: Path = _image_option(),
+    hidden: int = typer.Option(64, help="Hidden dim (first-layer latent width and hidden MLP width)."),
+    layers: int = typer.Option(3, help="Number of hidden layers after the Fourier feature map."),
+    n_freqs: int = typer.Option(270, help="Grid size K — integer harmonics per edge (Mehrabian+ 2024 canonical)."),
+    omega: float = typer.Option(30.0, help="Hidden-layer ω₀ (paper default 30)."),
+    gated_activation: bool = typer.Option(
+        True, help="Gated (released-code) hidden activation vs tanh(ω₀u) (paper Eq. 4)."
+    ),
+    use_layernorm: bool = typer.Option(True, help="LayerNorm on first-layer outputs (released-code only)."),
+    steps: int = typer.Option(500, help="Training steps."),
+    lr: float = typer.Option(1e-4, help="Adam learning rate (Mehrabian+ 2024 default)."),
+    grid: int = typer.Option(32, help="Image resize target."),
+    output_dir: Path | None = typer.Option(None, help="Run dir for artifacts. Defaults to runs/{ISO-timestamp}/."),
+    chunk_size: int = typer.Option(100, help="Adam steps per JIT'd scan chunk."),
+    snapshot_every: int = typer.Option(1, help="Write a recon snapshot every N chunks."),
+    log_every: int = typer.Option(10, help="Console-print loss every N steps."),
+    seed: int = typer.Option(0, help="PRNG seed."),
+) -> None:
+    """Fit an image with FKAN (Mehrabian+ 2024).
+
+    Defaults reproduce the released-code configuration (gated activation +
+    LayerNorm) whose numbers are the paper's Table I headline; pass
+    ``--no-gated-activation --no-use-layernorm`` for the paper-text tanh variant.
+    """
+    key = jax.random.key(seed)
+    coords, target, in_dim = _load_target(image, None, grid)
+    inr = ondes.FKAN(
+        in_dim=in_dim,
+        hidden_dim=hidden,
+        num_hidden_layers=layers,
+        n_freqs=n_freqs,
+        omega_hidden=omega,
+        gated_activation=gated_activation,
+        use_layernorm=use_layernorm,
+        key=key,
+    )
+    _train_and_save(
+        model=Model(inr=inr),
+        basis_label="fkan",
+        image=image,
+        synthetic_choice=None,
+        in_dim=in_dim,
+        coords=coords,
+        target=target,
+        hidden=hidden,
+        layers=layers,
+        steps=steps,
+        lr=lr,
+        grid=grid,
+        chunk_size=chunk_size,
+        snapshot_every=snapshot_every,
+        log_every=log_every,
+        output_dir=output_dir,
+        seed=seed,
+        basis_extras={
+            "n_freqs": n_freqs,
+            "omega": omega,
+            "gated_activation": gated_activation,
+            "use_layernorm": use_layernorm,
+        },
     )
 
 
