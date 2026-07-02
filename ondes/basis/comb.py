@@ -15,14 +15,16 @@ With the fundamental rescaled to ``omega`` for every variant (the ``match_freq``
 convention baked into :func:`_odd_freqs`), ``m`` and the comb coefficients become
 pure harmonic-content knobs at a fixed base frequency — an apples-to-apples axis
 against SIREN. Every variant holds ``||c_j||_2 = 1`` per neuron, which pins the
-init variance: under unit-variance pre-activations in the wrapping regime
-(``omega * std(pre) >> 1``) each ``sin`` term has variance ~1/2 and the terms are
-nearly independent, so
+init variance: under unit-variance pre-activations each ``sin`` term has variance
+~1/2 and the odd harmonics are near-orthogonal (their frequencies differ by
+``>= 2*omega``, so the cross-terms nearly vanish), giving
 
     Var[phi_j] ~= (1/2) * ||c_j||^2 = 1/2
 
-for every neuron. SIREN's depth fixed point is preserved as the comb reshapes, so
-the same SIREN-family init (:func:`ondes.basis.siren.siren_init`) applies unchanged.
+for every neuron. This holds at the SIREN operating point (sin-argument std ~1),
+not only in the large-``omega`` limit. SIREN's depth fixed point is preserved as
+the comb reshapes, so the same SIREN-family init
+(:func:`ondes.basis.siren.siren_init`) applies unchanged.
 
 This family covers periodic *odd* functions only: ``sn``'s ``m -> 1`` limit is
 ``tanh`` (aperiodic, outside any finite sine comb), so ``m`` is clipped strictly
@@ -39,6 +41,10 @@ neuron moves only along the ``sn`` curve — fewer degrees of freedom, stable);
 ``HarmonicComb`` frees the coefficients onto the full unit sphere (more
 expressive, but shows late-training instability under Adam and is not yet
 validated as an FWS weight-generator basis). Start with ``JacobiLearnM``.
+
+Defaults follow the ondes ``omega_first=6.0`` / ``omega_hidden=1.0`` convention,
+*not* the source experiments' ``omega=20`` (nor canonical SIREN's 30) — set
+``omega_first`` / ``omega_hidden`` explicitly when reproducing scratchpad results.
 
 Constraints (both variants):
     Per-neuron learnable activation parameters are known to *hurt* at depth
