@@ -16,6 +16,7 @@ from ondes.basis.mfn import FourierMFN, GaborMFN
 from ondes.basis.pnf import PNF
 from ondes.basis.rff import RFF, RFFLayer
 from ondes.basis.siren import SIREN, SIRENLayer, siren_init
+from ondes.basis.winner import WINNER, WinnerSchedule, spectral_centroid
 from ondes.basis.wire import WIRE, WIRELayer
 
 
@@ -39,7 +40,10 @@ __all__ = [
     "RFFLayer",
     "SIREN",
     "SIRENLayer",
+    "WINNER",
     "WIRE",
     "WIRELayer",
+    "WinnerSchedule",
     "siren_init",
+    "spectral_centroid",
 ]
